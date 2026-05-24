@@ -128,13 +128,13 @@ export class ReWriteModal extends Modal {
 	private renderRecordTab(parent: HTMLElement, isWebSpeech: boolean, language: string): void {
 		if (isWebSpeech && !isWebSpeechAvailable()) {
 			parent.createEl('p', {
-				text: 'Web Speech is not available here. Use the Paste tab or pick a different transcription provider in settings.',
+				text: 'Web Speech is not available here. Use the paste tab or pick a different transcription provider in settings.',
 			});
 			return;
 		}
 		if (!isWebSpeech && !isMediaRecorderAvailable()) {
 			parent.createEl('p', {
-				text: 'Audio recording is not supported in this environment. Use the Paste tab instead.',
+				text: 'Audio recording is not supported in this environment. Use the paste tab instead.',
 			});
 			return;
 		}
