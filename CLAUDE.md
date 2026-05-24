@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-This repo is the starting point for a planned **Voice Notes plugin for Obsidian**. The current contents are the unmodified Obsidian [sample-plugin](https://github.com/obsidianmd/obsidian-sample-plugin) boilerplate (note: [manifest.json](manifest.json) still reports `id: "sample-plugin"`, `name: "Sample Plugin"` — these need to be replaced before release).
+**Implementation in progress against [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md). The live status of each phase (what's committed, what's uncommitted, architectural decisions made along the way) is in [docs/claude-scratch/STATUS.md](docs/claude-scratch/STATUS.md). Read STATUS.md first; it is more current than the rest of this section, which will be rewritten wholesale in Phase 13.**
 
-The real spec — providers, profile system, modal UX, templates, settings layout, API request shapes — lives in [obsidian-voice-notes-spec.md](obsidian-voice-notes-spec.md). Treat that file as the source of truth for what to build; the code in [src/](src/) is placeholder scaffolding.
+This repo is becoming the **ReWrite (Voice Notes) plugin for Obsidian**. The spec (providers, profile system, modal UX, templates, settings layout, API request shapes) lives in [obsidian-voice-notes-spec.md](obsidian-voice-notes-spec.md), which is still the source of truth for behavior.
 
 When implementing spec features, follow the file layout the spec prescribes (provider adapters under `src/transcription/` and `src/llm/`, factories in each `index.ts`, no provider-specific logic leaking outside its own file).
 

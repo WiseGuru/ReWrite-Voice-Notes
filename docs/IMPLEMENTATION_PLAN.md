@@ -76,6 +76,15 @@ src/
 
 ## Implementation phases
 
+### Per-phase deliverables (applies to every phase below)
+
+Every phase ends with the same two doc touches before it counts as done:
+
+1. **Update [docs/claude-scratch/STATUS.md](claude-scratch/STATUS.md)**: bump the "Updated" date, flip the phase row to committed/uncommitted, list uncommitted files, and trim the "What's left" section. This is the live tracker, so a future Claude can resume without re-reading the world.
+2. **Update [CLAUDE.md](../CLAUDE.md)** if the phase changed anything CLAUDE.md describes (architecture, commands, gotchas, conventions). Per CLAUDE.md's own Documentation Maintenance rule. Phase 13 is the dedicated full refresh; phases before it should at minimum keep the doc from going stale (e.g. drop a pointer to STATUS.md if "Project state" is now wrong).
+
+Treat both as part of the phase, not follow-ups. The user has already had to remind once.
+
 ### Phase 1: Scaffold rename and types (foundations)
 
 - [manifest.json](../manifest.json): `id` → `rewrite-plugin`, `name` → `ReWrite (Voice Notes)`, `version` → `0.1.0` (pre-release), `minAppVersion` → `1.4.0`, `description` → spec wording, drop `fundingUrl`/`authorUrl`/`author` Obsidian defaults, `isDesktopOnly: false`.

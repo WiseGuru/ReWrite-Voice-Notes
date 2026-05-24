@@ -1,8 +1,163 @@
-/*
+/* ReWrite plugin styles */
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.rewrite-modal .rewrite-template-row {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-bottom: 12px;
+}
 
-If your plugin does not need CSS, delete this file.
+.rewrite-modal .rewrite-tabs {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 8px;
+}
 
-*/
+.rewrite-modal .rewrite-tab.is-active {
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.rewrite-modal .rewrite-tab-body {
+	margin-top: 8px;
+}
+
+.rewrite-modal .rewrite-recording-indicator {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+.rewrite-modal .rewrite-pulse-dot {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background-color: var(--color-red);
+	animation: rewrite-pulse 1s ease-in-out infinite;
+}
+
+@keyframes rewrite-pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.3; }
+}
+
+.rewrite-modal .rewrite-live-transcript {
+	min-height: 60px;
+	padding: 8px;
+	margin-top: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	white-space: pre-wrap;
+}
+
+.rewrite-modal .rewrite-paste {
+	width: 100%;
+	min-height: 160px;
+	font-family: var(--font-text);
+}
+
+.rewrite-modal .rewrite-progress {
+	margin-top: 12px;
+	font-style: italic;
+}
+
+.rewrite-modal .rewrite-retry {
+	margin-top: 12px;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+}
+
+.rewrite-setup-card {
+	padding: 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	margin-bottom: 12px;
+}
+
+.rewrite-setup-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+/* Settings tab */
+
+.rewrite-settings .rewrite-section-desc {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	margin-top: -4px;
+	margin-bottom: 8px;
+}
+
+.rewrite-settings .rewrite-templates-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.rewrite-settings .rewrite-templates-empty {
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.rewrite-settings .rewrite-template-item {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	padding: 8px;
+	background-color: var(--background-secondary);
+}
+
+.rewrite-settings .rewrite-template-item.is-dragging {
+	opacity: 0.4;
+}
+
+.rewrite-settings .rewrite-template-item.is-drop-target {
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+.rewrite-settings .rewrite-template-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.rewrite-settings .rewrite-drag-handle {
+	cursor: grab;
+	user-select: none;
+	color: var(--text-muted);
+	padding: 0 4px;
+}
+
+.rewrite-settings .rewrite-drag-handle:active {
+	cursor: grabbing;
+}
+
+.rewrite-settings .rewrite-template-name {
+	flex: 1;
+	font-weight: var(--font-semibold);
+}
+
+.rewrite-settings .rewrite-template-actions {
+	display: flex;
+	gap: 4px;
+}
+
+.rewrite-settings .rewrite-template-editor {
+	margin-top: 8px;
+	padding-top: 8px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.rewrite-settings .rewrite-prompt-textarea {
+	width: 100%;
+	min-height: 120px;
+	font-family: var(--font-text);
+}
+
+.rewrite-settings .rewrite-templates-actions {
+	margin-top: 8px;
+}
