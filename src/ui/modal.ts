@@ -4,11 +4,13 @@ import { runPipeline, PipelineSource, PipelineStage } from '../pipeline';
 import { isMediaRecorderAvailable, isWebSpeechAvailable, resolveActiveProfile } from '../platform';
 import { Recorder } from '../recorder';
 import { startWebSpeech, WebSpeechSession } from '../webspeech';
-import { isProfileConfigured, renderSetupCard } from './setup-card';
+import { EnvironmentProfile } from '../types';
+import { isProfileConfigured, isProfileConfiguredForText, renderSetupCard } from './setup-card';
+import { resolveActiveTextSource } from './text-source';
 
 export class ReWriteModal extends Modal {
 	private templateId: string;
-	private activeTab: 'record' | 'paste' = 'record';
+	private activeTab: 'record' | 'paste' | 'fromNote' = 'record';
 	private recorder: Recorder | null = null;
 	private webSpeech: WebSpeechSession | null = null;
 	private timerHandle: number | null = null;
@@ -51,22 +53,7 @@ export class ReWriteModal extends Modal {
 		contentEl.createEl('h2', { text: 'ReWrite' });
 
 		const { kind, profile } = resolveActiveProfile(this.plugin.settings);
-		if (!isProfileConfigured(profile)) {
-			renderSetupCard({
-				container: contentEl,
-				profile,
-				profileLabel: kind === 'desktop' ? 'Desktop' : 'Mobile',
-				onSaved: async () => {
-					await this.plugin.saveSettings();
-					this.render();
-				},
-				onOpenSettings: () => {
-					this.close();
-					this.openSettingsTab();
-				},
-			});
-			return;
-		}
+		const profileLabel = kind === 'desktop' ? 'Desktop' : 'Mobile';
 
 		if (this.plugin.settings.templates.length === 0) {
 			contentEl.createEl('p', {
@@ -83,11 +70,48 @@ export class ReWriteModal extends Modal {
 		this.renderTemplateSelector(contentEl);
 		this.renderTabBar(contentEl);
 		const tabBody = contentEl.createDiv({ cls: 'rewrite-tab-body' });
+
+		if (this.activeTab === 'fromNote') {
+			if (!isProfileConfiguredForText(profile)) {
+				this.renderSetupCardInTab(tabBody, profile, profileLabel, 'text');
+				return;
+			}
+			this.renderFromNoteTab(tabBody);
+			return;
+		}
+
+		if (!isProfileConfigured(profile)) {
+			this.renderSetupCardInTab(tabBody, profile, profileLabel, 'voice');
+			return;
+		}
+
 		if (this.activeTab === 'record') {
 			this.renderRecordTab(tabBody, profile.transcriptionProvider === 'webspeech', profile.transcriptionConfig.language);
 		} else {
 			this.renderPasteTab(tabBody);
 		}
+	}
+
+	private renderSetupCardInTab(
+		parent: HTMLElement,
+		profile: EnvironmentProfile,
+		profileLabel: string,
+		purpose: 'voice' | 'text',
+	): void {
+		renderSetupCard({
+			container: parent,
+			profile,
+			profileLabel,
+			purpose,
+			onSaved: async () => {
+				await this.plugin.saveSettings();
+				this.render();
+			},
+			onOpenSettings: () => {
+				this.close();
+				this.openSettingsTab();
+			},
+		});
 	}
 
 	private renderTemplateSelector(parent: HTMLElement): void {
@@ -112,14 +136,20 @@ export class ReWriteModal extends Modal {
 		const tabs = parent.createDiv({ cls: 'rewrite-tabs' });
 		const record = tabs.createEl('button', { text: 'Record', cls: 'rewrite-tab' });
 		const paste = tabs.createEl('button', { text: 'Paste', cls: 'rewrite-tab' });
+		const fromNote = tabs.createEl('button', { text: 'From note', cls: 'rewrite-tab' });
 		if (this.activeTab === 'record') record.addClass('is-active');
-		else paste.addClass('is-active');
+		else if (this.activeTab === 'paste') paste.addClass('is-active');
+		else fromNote.addClass('is-active');
 		record.addEventListener('click', () => {
 			this.activeTab = 'record';
 			this.render();
 		});
 		paste.addEventListener('click', () => {
 			this.activeTab = 'paste';
+			this.render();
+		});
+		fromNote.addEventListener('click', () => {
+			this.activeTab = 'fromNote';
 			this.render();
 		});
 	}
@@ -202,6 +232,34 @@ export class ReWriteModal extends Modal {
 			void this.execute({ kind: 'paste', text });
 		});
 		textarea.focus();
+	}
+
+	private renderFromNoteTab(parent: HTMLElement): void {
+		const previewEl = parent.createEl('p', { cls: 'rewrite-from-note-preview' });
+		const source = resolveActiveTextSource(this.app);
+		if (!source) {
+			previewEl.setText('No active Markdown note. Open a note (or select text) to use this.');
+		} else if (source.scope === 'selection') {
+			previewEl.setText(`Selection: ${source.text.length.toLocaleString()} chars`);
+		} else {
+			previewEl.setText(`Whole note: ${source.text.length.toLocaleString()} chars`);
+		}
+
+		const button = parent.createEl('button', { text: 'Run', cls: 'mod-cta' });
+		if (!source) button.disabled = true;
+		button.addEventListener('click', () => {
+			const fresh = resolveActiveTextSource(this.app);
+			if (!fresh) {
+				new Notice('Open a Markdown note or select text first.');
+				return;
+			}
+			const trimmed = fresh.text.trim();
+			if (!trimmed) {
+				new Notice('Source text is empty.');
+				return;
+			}
+			void this.execute({ kind: 'text', text: fresh.text });
+		});
 	}
 
 	private async beginCapture(

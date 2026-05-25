@@ -56,9 +56,11 @@ src/
 │   ├── tab.ts                       # PluginSettingTab: active profile, two profile sections, templates, recording
 │   └── default-templates.ts         # The 5 seeded templates (General cleanup, Todo list, etc.)
 ├── ui/
-│   ├── modal.ts                     # Main modal: template select + Record/Paste tabs + setup-card injection
-│   ├── setup-card.ts                # Inline blocker when active profile is unconfigured
-│   └── quick-record.ts              # QuickRecordController + floating mini-UI for the Quick Record command
+│   ├── modal.ts                     # Main modal: template select + Record/Paste/From note tabs + setup-card injection
+│   ├── setup-card.ts                # Inline blocker when active profile is unconfigured (voice vs text purpose)
+│   ├── quick-record.ts              # QuickRecordController + floating mini-UI for the Quick Record command
+│   ├── template-picker.ts           # Lightweight modal for picking a template (used by Process text command and editor menu)
+│   └── text-source.ts               # resolveActiveTextSource + runTextPipeline helpers for text-source flows
 ├── transcription/
 │   ├── index.ts                     # TranscriptionProvider interface + createTranscriptionProvider()
 │   ├── openai.ts                    # Whisper-shape POST (also used by openai-compatible + groq)
@@ -77,11 +79,13 @@ src/
 
 [src/pipeline.ts](src/pipeline.ts) runs three stages with `onStage` callbacks for UI:
 
-1. **Transcribe**: `audio` → `createTranscriptionProvider(profile.transcriptionProvider).transcribe(blob, config)`. Skipped when the source is `paste` (text passes through). Short-circuited when the source is `webspeech` (the transcript was already captured live by `src/webspeech.ts` during recording).
+1. **Transcribe**: `audio` → `createTranscriptionProvider(profile.transcriptionProvider).transcribe(blob, config)`. Skipped when the source is `paste` or `text` (input passes through). Short-circuited when the source is `webspeech` (the transcript was already captured live by `src/webspeech.ts` during recording).
 2. **Cleanup**: `createLLMProvider(profile.llmProvider).complete(template.prompt, transcript, config)`. On error, the raw transcript is copied to the clipboard before re-throwing, so the user keeps their words.
 3. **Insert**: `src/insert.ts` routes to `cursor` / `newFile` / `append` per the template. `cursor` falls back to `append` when no editor is active; `append` falls back to `newFile` when no markdown file exists. `{{date}}` / `{{time}}` in filename templates expand via Obsidian's `moment`.
 
-The pipeline accepts an `AbortSignal` (forwarded to providers) and is consumed by both [src/ui/modal.ts](src/ui/modal.ts) and [src/ui/quick-record.ts](src/ui/quick-record.ts).
+The pipeline accepts an `AbortSignal` (forwarded to providers) and is consumed by [src/ui/modal.ts](src/ui/modal.ts), [src/ui/quick-record.ts](src/ui/quick-record.ts), and [src/ui/text-source.ts](src/ui/text-source.ts) (the `runTextPipeline` helper for command + editor-menu entry points).
+
+The `PipelineSource` union has four variants: `audio` (recorded blob), `paste` (textarea input), `webspeech` (live-captured transcript), `text` (input from an existing note via selection or whole body). Text-source flows skip transcription entirely and only require the LLM half of the profile.
 
 ## Provider system
 
@@ -106,8 +110,9 @@ Registered in [src/main.ts](src/main.ts):
 
 - **`rewrite-plugin:open-modal`** ("Open"): opens the main modal with the last-used template selected.
 - **`rewrite-plugin:quick-record`** ("Quick record"): starts a recording immediately with a floating mini-UI (no modal). Second press toggles to Stop. On unconfigured profile or capture-API unavailability, opens the modal instead. On post-capture pipeline error, opens the modal so the user can retry (LLM-stage failures leave the raw transcript on the clipboard).
+- **`rewrite-plugin:process-text`** ("Process text with template"): runs a template over the active editor's selection (or the whole note body if there's no selection). Opens a template quick-picker, then runs the pipeline in the background with progress shown via `Notice`. Gates on LLM-only configuration; opens the main modal's setup card when not configured. Bails with a Notice when no Markdown editor is active.
 
-Plus an `addRibbonIcon('mic', 'ReWrite', ...)` that opens the modal.
+Plus an editor-menu item "ReWrite with template..." registered via `workspace.on('editor-menu', ...)` and an `addRibbonIcon('mic', 'ReWrite', ...)` that opens the modal.
 
 ## Code style
 

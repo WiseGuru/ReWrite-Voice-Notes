@@ -9,7 +9,8 @@ export type PipelineStage = 'transcribe' | 'cleanup' | 'insert';
 export type PipelineSource =
 	| { kind: 'audio'; audio: Blob }
 	| { kind: 'paste'; text: string }
-	| { kind: 'webspeech'; transcript: string };
+	| { kind: 'webspeech'; transcript: string }
+	| { kind: 'text'; text: string };
 
 export interface PipelineParams {
 	app: App;
@@ -50,6 +51,7 @@ async function collectTranscript(params: PipelineParams): Promise<string> {
 	const source = params.source;
 	switch (source.kind) {
 		case 'paste':
+		case 'text':
 			return source.text;
 		case 'webspeech':
 			return source.transcript;

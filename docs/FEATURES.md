@@ -74,50 +74,11 @@ Once Phase A is solid:
 
 ---
 
-### 3. Act on existing text in a note
-
-**Goal:** apply a ReWrite template to text that's already in a markdown note, no recording involved. Use case: you used a separate STT app (or just typed) to get a wall of text into a note, now you want ReWrite to turn it into a daily note, a todo list, a summary, etc.
-
-This is the same pipeline minus the transcribe stage. [src/pipeline.ts](../src/pipeline.ts) already short-circuits transcription for `source.kind === 'paste'` and `source.kind === 'webspeech'`; a new `source.kind === 'text'` slots in identically.
-
-**Entry points (three, mirroring how voice has three):**
-
-1. **Command palette: `rewrite-plugin:process-text` ("Process text with template").** Picks template, then runs on the editor's current selection if there is one, otherwise the whole note body. Bails with a Notice if no markdown editor is active.
-2. **Editor context menu item: "ReWrite with template..."** Registered via `this.registerEvent(this.app.workspace.on('editor-menu', ...))`. Opens a template quick-picker (a small modal listing templates by name). Operates on selection if present, otherwise whole note.
-3. **New tab in the existing modal: "From note".** Joins the existing "Record" and "Paste" tabs in [src/ui/modal.ts](../src/ui/modal.ts). Shows a preview of what will be processed ("Selection: 247 chars" or "Whole note: 1,832 chars"), template dropdown, Run button. Reachable via the ribbon icon and the existing `open-modal` command, so the feature is discoverable without anyone reading docs.
-
-**Source resolution:**
-
-- If an editor selection is non-empty → use selection.
-- Else if the active leaf is a markdown view → use full note body.
-- Else → Notice "Open a markdown note or select text to use this command." Bail.
-
-**Output / insert behavior:**
-
-- Honors the template's `insertMode` (cursor / newFile / append), same as voice. If the template says "create new file in Daily/", that's where the cleaned output goes regardless of where the source text came from. Consistent mental model: templates own *where output lives*.
-- The source text is **not modified by default**. Output goes per template; user manually deletes the source if they want. Reason: silently mutating the source on every invocation is destructive and surprising.
-- One exception worth considering: a per-invocation "Replace source after processing" checkbox in the modal/quick-picker (defaults off). Not a template setting because it's about the source, not the output. **Open question:** ship without this in v1 of the feature, add only if users actually ask. The default-off "Keep both" behavior is safer.
-
-**Pipeline change:**
-
-- New source variant in [src/pipeline.ts](../src/pipeline.ts): `{ kind: 'text', text: string }`. Skips transcribe stage exactly like `paste` does. Cleanup + insert run unchanged.
-- The LLM-error clipboard fallback (currently copies the raw transcript when cleanup fails) still applies: copies the source text so the user doesn't lose context if the LLM call dies.
-- `AbortSignal` plumbed through as today.
-
-**Setup-card / config gating:**
-
-- The "From note" tab and the new commands only need the LLM provider configured, not transcription. Setup card logic in [src/ui/setup-card.ts](../src/ui/setup-card.ts) currently blocks on *both* being configured. Either: split the gating per entry point (cleaner) or: only block on LLM for text-source entries (simpler). Pick when implementing.
-
-**Touch points:** [src/pipeline.ts](../src/pipeline.ts) (add `text` source variant), [src/main.ts](../src/main.ts) (register new command + editor-menu event), [src/ui/modal.ts](../src/ui/modal.ts) (add "From note" tab), new file `src/ui/template-picker.ts` for the quick-picker modal used by the command + context menu, [src/ui/setup-card.ts](../src/ui/setup-card.ts) (relax gating for text-source flow), [src/types.ts](../src/types.ts) (extend source union).
-
-**Out of scope (for this feature):**
-
-- Per-template "this template only operates on text" / "this template only operates on voice" gating. All templates work with both source types in v1; if a user creates a template whose prompt only makes sense for raw transcripts, that's on them.
-- Multi-select / multi-note batch processing. One source at a time.
-
----
-
 ## Done
+
+### Act on existing text in a note
+
+Added a `{ kind: 'text'; text: string }` source variant to the pipeline (skips transcription, same path as `paste`). Three entry points: `rewrite-plugin:process-text` command, an editor-menu item "ReWrite with template...", and a new "From note" tab in the main modal. All three resolve text from the active editor (selection if non-empty, otherwise whole note body) and open a lightweight template quick-picker before running. Setup-card gating split into voice (full check) vs text (LLM-only check) via `isProfileConfiguredForText` and a `purpose` param on `renderSetupCard`; the modal's per-tab rendering picks the right gate. Helpers live in [src/ui/text-source.ts](../src/ui/text-source.ts) (resolution + `runTextPipeline`) and [src/ui/template-picker.ts](../src/ui/template-picker.ts) (the quick-picker modal). Shipped without the per-invocation "Replace source" checkbox; can revisit if users ask.
 
 ### Collapse API key settings: per-profile only, hide rarely-changed fields under "Advanced"
 

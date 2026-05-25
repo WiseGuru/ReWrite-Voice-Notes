@@ -26,6 +26,10 @@ export function isProfileConfigured(profile: EnvironmentProfile): boolean {
 		if (!profile.transcriptionConfig.apiKey) return false;
 		if (tx === 'openai-compatible' && !profile.transcriptionConfig.baseUrl.trim()) return false;
 	}
+	return isProfileConfiguredForText(profile);
+}
+
+export function isProfileConfiguredForText(profile: EnvironmentProfile): boolean {
 	if (!profile.llmConfig.model) return false;
 	if (!profile.llmConfig.apiKey) return false;
 	if (profile.llmProvider === 'openai-compatible' && !profile.llmConfig.baseUrl.trim()) return false;
@@ -36,60 +40,66 @@ export interface SetupCardParams {
 	container: HTMLElement;
 	profile: EnvironmentProfile;
 	profileLabel: string;
+	purpose?: 'voice' | 'text';
 	onSaved: () => Promise<void>;
 	onOpenSettings: () => void;
 }
 
 export function renderSetupCard(params: SetupCardParams): void {
 	const { container, profile, profileLabel } = params;
+	const purpose = params.purpose ?? 'voice';
 	const card = container.createDiv({ cls: 'rewrite-setup-card' });
 	card.createEl('h3', { text: 'Setup required' });
 	card.createEl('p', {
-		text: `Your ${profileLabel} profile needs a transcription provider and an LLM. Fill in the basics here or open settings for full configuration.`,
+		text: purpose === 'text'
+			? `Your ${profileLabel} profile needs an LLM provider to process text. Fill in the basics here or open settings.`
+			: `Your ${profileLabel} profile needs a transcription provider and an LLM. Fill in the basics here or open settings for full configuration.`,
 	});
 
-	new Setting(card)
-		.setName('Transcription provider')
-		.addDropdown((dd) => {
-			for (const opt of TRANSCRIPTION_OPTIONS) dd.addOption(opt.id, opt.label);
-			dd.setValue(profile.transcriptionProvider);
-			dd.onChange((v) => {
-				profile.transcriptionProvider = v as TranscriptionProviderID;
-				profile.transcriptionConfig.apiKey = '';
-				container.empty();
-				renderSetupCard(params);
-			});
-		});
-
-	if (profile.transcriptionProvider !== 'webspeech') {
+	if (purpose === 'voice') {
 		new Setting(card)
-			.setName('Transcription model')
-			.setDesc(modelPlaceholderForTranscription(profile.transcriptionProvider))
-			.addText((t) => {
-				t.setValue(profile.transcriptionConfig.model);
-				t.onChange((v) => {
-					profile.transcriptionConfig.model = v;
+			.setName('Transcription provider')
+			.addDropdown((dd) => {
+				for (const opt of TRANSCRIPTION_OPTIONS) dd.addOption(opt.id, opt.label);
+				dd.setValue(profile.transcriptionProvider);
+				dd.onChange((v) => {
+					profile.transcriptionProvider = v as TranscriptionProviderID;
+					profile.transcriptionConfig.apiKey = '';
+					container.empty();
+					renderSetupCard(params);
 				});
 			});
 
-		if (profile.transcriptionProvider === 'openai-compatible') {
+		if (profile.transcriptionProvider !== 'webspeech') {
 			new Setting(card)
-				.setName('Transcription base URL')
-				.setDesc('e.g. http://localhost:8080 (whisper.cpp, faster-whisper-server)')
+				.setName('Transcription model')
+				.setDesc(modelPlaceholderForTranscription(profile.transcriptionProvider))
 				.addText((t) => {
-					t.setValue(profile.transcriptionConfig.baseUrl);
+					t.setValue(profile.transcriptionConfig.model);
 					t.onChange((v) => {
-						profile.transcriptionConfig.baseUrl = v;
+						profile.transcriptionConfig.model = v;
 					});
 				});
-		}
 
-		renderApiKeyField(card, {
-			label: 'Transcription API key',
-			placeholder: 'Saved securely on this device',
-			getValue: () => profile.transcriptionConfig.apiKey,
-			setValue: (v) => { profile.transcriptionConfig.apiKey = v; },
-		});
+			if (profile.transcriptionProvider === 'openai-compatible') {
+				new Setting(card)
+					.setName('Transcription base URL')
+					.setDesc('e.g. http://localhost:8080 (whisper.cpp, faster-whisper-server)')
+					.addText((t) => {
+						t.setValue(profile.transcriptionConfig.baseUrl);
+						t.onChange((v) => {
+							profile.transcriptionConfig.baseUrl = v;
+						});
+					});
+			}
+
+			renderApiKeyField(card, {
+				label: 'Transcription API key',
+				placeholder: 'Saved securely on this device',
+				getValue: () => profile.transcriptionConfig.apiKey,
+				setValue: (v) => { profile.transcriptionConfig.apiKey = v; },
+			});
+		}
 	}
 
 	new Setting(card)
