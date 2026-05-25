@@ -47,7 +47,7 @@ export function createAssemblyAITranscription(): TranscriptionProvider {
 			}
 
 			const createBody: Record<string, unknown> = { audio_url: uploadUrl };
-			if (config.model) createBody.speech_model = config.model;
+			if (config.model) createBody.speech_models = [config.model];
 			if (config.language) createBody.language_code = config.language;
 			const created = await jsonPost<TranscriptCreateResponse>(
 				'assemblyai',
