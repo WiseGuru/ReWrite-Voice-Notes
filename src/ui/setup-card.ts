@@ -1,6 +1,5 @@
 import { Setting } from 'obsidian';
-import { EnvironmentProfile, GlobalSettings, LLMProviderID, TranscriptionProviderID } from '../types';
-import { llmProviderFamily, resolveLLMApiKey, resolveTranscriptionApiKey, transcriptionProviderFamily } from '../settings';
+import { EnvironmentProfile, LLMProviderID, TranscriptionProviderID } from '../types';
 
 const TRANSCRIPTION_OPTIONS: Array<{ id: TranscriptionProviderID; label: string }> = [
 	{ id: 'openai', label: 'OpenAI Whisper' },
@@ -20,22 +19,21 @@ const LLM_OPTIONS: Array<{ id: LLMProviderID; label: string }> = [
 	{ id: 'mistral', label: 'Mistral' },
 ];
 
-export function isProfileConfigured(profile: EnvironmentProfile, settings: GlobalSettings): boolean {
+export function isProfileConfigured(profile: EnvironmentProfile): boolean {
 	const tx = profile.transcriptionProvider;
 	if (tx !== 'webspeech') {
 		if (!profile.transcriptionConfig.model) return false;
-		if (!resolveTranscriptionApiKey(settings, profile)) return false;
+		if (!profile.transcriptionConfig.apiKey) return false;
 		if (tx === 'openai-compatible' && !profile.transcriptionConfig.baseUrl.trim()) return false;
 	}
 	if (!profile.llmConfig.model) return false;
-	if (!resolveLLMApiKey(settings, profile)) return false;
+	if (!profile.llmConfig.apiKey) return false;
 	if (profile.llmProvider === 'openai-compatible' && !profile.llmConfig.baseUrl.trim()) return false;
 	return true;
 }
 
 export interface SetupCardParams {
 	container: HTMLElement;
-	settings: GlobalSettings;
 	profile: EnvironmentProfile;
 	profileLabel: string;
 	onSaved: () => Promise<void>;
@@ -43,7 +41,7 @@ export interface SetupCardParams {
 }
 
 export function renderSetupCard(params: SetupCardParams): void {
-	const { container, profile, settings, profileLabel } = params;
+	const { container, profile, profileLabel } = params;
 	const card = container.createDiv({ cls: 'rewrite-setup-card' });
 	card.createEl('h3', { text: 'Setup required' });
 	card.createEl('p', {
@@ -89,8 +87,8 @@ export function renderSetupCard(params: SetupCardParams): void {
 		renderApiKeyField(card, {
 			label: 'Transcription API key',
 			placeholder: 'Saved securely on this device',
-			getValue: () => keyFieldValue('transcription', settings, profile),
-			setValue: (v) => writeKeyField('transcription', settings, profile, v),
+			getValue: () => profile.transcriptionConfig.apiKey,
+			setValue: (v) => { profile.transcriptionConfig.apiKey = v; },
 		});
 	}
 
@@ -132,8 +130,8 @@ export function renderSetupCard(params: SetupCardParams): void {
 	renderApiKeyField(card, {
 		label: 'LLM API key',
 		placeholder: 'Saved securely on this device',
-		getValue: () => keyFieldValue('llm', settings, profile),
-		setValue: (v) => writeKeyField('llm', settings, profile, v),
+		getValue: () => profile.llmConfig.apiKey,
+		setValue: (v) => { profile.llmConfig.apiKey = v; },
 	});
 
 	const actions = card.createDiv({ cls: 'rewrite-setup-actions' });
@@ -161,39 +159,6 @@ function renderApiKeyField(container: HTMLElement, field: KeyField): void {
 			t.setValue(field.getValue());
 			t.onChange((v) => field.setValue(v));
 		});
-}
-
-function keyFieldValue(
-	side: 'transcription' | 'llm',
-	settings: GlobalSettings,
-	profile: EnvironmentProfile,
-): string {
-	const family = side === 'transcription'
-		? transcriptionProviderFamily(profile.transcriptionProvider)
-		: llmProviderFamily(profile.llmProvider);
-	const profileKey = side === 'transcription' ? profile.transcriptionConfig.apiKey : profile.llmConfig.apiKey;
-	if (profileKey) return profileKey;
-	if (family) return settings.apiKeys[family] ?? '';
-	return '';
-}
-
-function writeKeyField(
-	side: 'transcription' | 'llm',
-	settings: GlobalSettings,
-	profile: EnvironmentProfile,
-	value: string,
-): void {
-	const family = side === 'transcription'
-		? transcriptionProviderFamily(profile.transcriptionProvider)
-		: llmProviderFamily(profile.llmProvider);
-	if (family) {
-		settings.apiKeys[family] = value;
-		if (side === 'transcription') profile.transcriptionConfig.apiKey = '';
-		else profile.llmConfig.apiKey = '';
-	} else {
-		if (side === 'transcription') profile.transcriptionConfig.apiKey = value;
-		else profile.llmConfig.apiKey = value;
-	}
 }
 
 function modelPlaceholderForTranscription(id: TranscriptionProviderID): string {

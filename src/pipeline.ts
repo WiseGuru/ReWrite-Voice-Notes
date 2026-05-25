@@ -1,6 +1,5 @@
 import { App } from 'obsidian';
 import { EnvironmentProfile, GlobalSettings, NoteTemplate } from './types';
-import { resolveLLMApiKey, resolveTranscriptionApiKey } from './settings';
 import { createTranscriptionProvider } from './transcription';
 import { createLLMProvider } from './llm';
 import { insertOutput, InsertResult } from './insert';
@@ -57,23 +56,15 @@ async function collectTranscript(params: PipelineParams): Promise<string> {
 		case 'audio': {
 			params.onStage?.('transcribe');
 			const provider = createTranscriptionProvider(params.profile.transcriptionProvider);
-			const config = {
-				...params.profile.transcriptionConfig,
-				apiKey: resolveTranscriptionApiKey(params.settings, params.profile),
-			};
-			return provider.transcribe(source.audio, config, params.signal);
+			return provider.transcribe(source.audio, params.profile.transcriptionConfig, params.signal);
 		}
 	}
 }
 
 async function cleanupTranscript(params: PipelineParams, transcript: string): Promise<string> {
 	const llm = createLLMProvider(params.profile.llmProvider);
-	const config = {
-		...params.profile.llmConfig,
-		apiKey: resolveLLMApiKey(params.settings, params.profile),
-	};
 	try {
-		return await llm.complete(params.template.prompt, transcript, config, params.signal);
+		return await llm.complete(params.template.prompt, transcript, params.profile.llmConfig, params.signal);
 	} catch (e) {
 		const original = e instanceof Error ? e : new Error(String(e));
 		try {

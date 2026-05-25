@@ -10,6 +10,8 @@ The v1 implementation is feature-complete against [obsidian-voice-notes-spec.md]
 
 When extending the plugin, follow the file layout the spec prescribes: provider adapters under `src/transcription/` and `src/llm/`, factories in each `index.ts`, no provider-specific logic leaking outside its own file.
 
+**Pre-release status: no migrations, no backcompat shims.** There are no real users yet. When changing settings shape, `data.json` keys, `secrets.json.nosync` schema, template structure, or any other persisted format: change it cleanly. Do not write migration code, do not add compatibility read paths, do not preserve deprecated fields "just in case." Existing dev installs can be reset by deleting `data.json` / `secrets.json.nosync`. Drop this rule the moment v1.0.0 ships to the community plugin directory.
+
 ## Documentation maintenance
 
 Update CLAUDE.md with every behavioral change. When modifying code that this document describes (pipeline stages, command IDs, settings keys, gotchas, conventions), update CLAUDE.md in the same change. If a behavioral change has no existing section, add one or drop a note under "Gotchas". Treat the doc update as part of the task, not a follow-up.
@@ -50,8 +52,8 @@ src/
 ├── pipeline.ts                      # transcribe → cleanup → insert orchestrator
 ├── insert.ts                        # cursor/newFile/append + {{date}}/{{time}} expansion
 ├── settings/
-│   ├── index.ts                     # DEFAULT_SETTINGS, load/save, secret hydration, family resolvers
-│   ├── tab.ts                       # PluginSettingTab with all 6 sections
+│   ├── index.ts                     # DEFAULT_SETTINGS, load/save, per-profile secret hydration
+│   ├── tab.ts                       # PluginSettingTab: active profile, two profile sections, templates, recording
 │   └── default-templates.ts         # The 5 seeded templates (General cleanup, Todo list, etc.)
 ├── ui/
 │   ├── modal.ts                     # Main modal: template select + Record/Paste tabs + setup-card injection
@@ -85,7 +87,7 @@ The pipeline accepts an `AbortSignal` (forwarded to providers) and is consumed b
 
 [src/transcription/index.ts](src/transcription/index.ts) and [src/llm/index.ts](src/llm/index.ts) each define a small interface plus a `create...Provider(id)` factory. Provider families share one adapter file: OpenAI Whisper, `openai-compatible`, and Groq all dispatch into [src/transcription/openai.ts](src/transcription/openai.ts) with different base URLs; OpenAI GPT, `openai-compatible`, and Mistral all dispatch into [src/llm/openai.ts](src/llm/openai.ts).
 
-API keys live in [src/secrets.ts](src/secrets.ts), keyed by *provider family* (`openai`, `anthropic`, `groq`, etc.) so that one OpenAI key serves both Whisper and GPT. Per-profile overrides exist on `EnvironmentProfile.transcriptionConfig.apiKey` / `llmConfig.apiKey`; the `openai-compatible` family has *no* global slot because its base URL is profile-specific. Keys are looked up via `resolveTranscriptionApiKey` / `resolveLLMApiKey` in [src/settings/index.ts](src/settings/index.ts).
+API keys are stored per profile on `EnvironmentProfile.transcriptionConfig.apiKey` / `llmConfig.apiKey`. Two slots per profile, one for transcription and one for the LLM. No global by-family map; the desktop and mobile profiles each carry their own keys even when both use the same provider (deliberate: per-profile keys make per-function usage tracking easier). Persistence is in [src/secrets.ts](src/secrets.ts) using the key IDs `profile:desktop:transcription`, `profile:desktop:llm`, `profile:mobile:transcription`, `profile:mobile:llm`.
 
 ## Settings
 
@@ -94,7 +96,7 @@ API keys live in [src/secrets.ts](src/secrets.ts), keyed by *provider family* (`
 1. `plugin.loadData()` returns `Partial<GlobalSettings> | null`.
 2. `mergeSettings(DEFAULT_SETTINGS, stored)` deep-merges, preferring stored values.
 3. If `merged.templates.length === 0`, [src/settings/default-templates.ts](src/settings/default-templates.ts) seeds the 5 starter templates and sets `defaultTemplateId` if unset. This handles first launch *and* migrations from any pre-Phase-11 install with an empty templates array.
-4. `hydrateSecrets()` reads keys from `secrets.json.nosync` and writes them into the in-memory `apiKeys` map + profile slots.
+4. `hydrateSecrets()` reads keys from `secrets.json.nosync` and writes them into each profile's `transcriptionConfig.apiKey` / `llmConfig.apiKey`.
 
 Saving flow strips secrets out of `data.json` and writes them to `secrets.json.nosync` instead (see [src/secrets.ts](src/secrets.ts)). Never persist API keys to `data.json`.
 

@@ -14,16 +14,6 @@ export type LLMProviderID =
 	| 'gemini'
 	| 'mistral';
 
-export type ProviderFamily =
-	| 'openai'
-	| 'anthropic'
-	| 'groq'
-	| 'assemblyai'
-	| 'deepgram'
-	| 'revai'
-	| 'gemini'
-	| 'mistral';
-
 export interface TranscriptionConfig {
 	apiKey: string;
 	baseUrl: string;
@@ -62,7 +52,6 @@ export type ActiveProfileKind = 'desktop' | 'mobile';
 export type RecordingFormatPreference = 'webm' | 'mp4';
 
 export interface GlobalSettings {
-	apiKeys: Partial<Record<ProviderFamily, string>>;
 	activeProfileOverride: ActiveProfileOverride;
 	desktopProfile: EnvironmentProfile;
 	mobileProfile: EnvironmentProfile;

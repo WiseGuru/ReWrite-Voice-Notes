@@ -51,10 +51,9 @@ export class ReWriteModal extends Modal {
 		contentEl.createEl('h2', { text: 'ReWrite' });
 
 		const { kind, profile } = resolveActiveProfile(this.plugin.settings);
-		if (!isProfileConfigured(profile, this.plugin.settings)) {
+		if (!isProfileConfigured(profile)) {
 			renderSetupCard({
 				container: contentEl,
-				settings: this.plugin.settings,
 				profile,
 				profileLabel: kind === 'desktop' ? 'Desktop' : 'Mobile',
 				onSaved: async () => {

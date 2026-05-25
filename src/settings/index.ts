@@ -4,10 +4,7 @@ import {
 	EnvironmentProfile,
 	GlobalSettings,
 	LLMConfig,
-	LLMProviderID,
-	ProviderFamily,
 	TranscriptionConfig,
-	TranscriptionProviderID,
 } from '../types';
 import { loadAllKeys, saveManyKeys } from '../secrets';
 import { freshDefaultTemplates } from './default-templates';
@@ -43,7 +40,6 @@ const MOBILE_DEFAULT_PROFILE: EnvironmentProfile = {
 };
 
 export const DEFAULT_SETTINGS: GlobalSettings = {
-	apiKeys: {},
 	activeProfileOverride: 'auto',
 	desktopProfile: DESKTOP_DEFAULT_PROFILE,
 	mobileProfile: MOBILE_DEFAULT_PROFILE,
@@ -53,22 +49,7 @@ export const DEFAULT_SETTINGS: GlobalSettings = {
 	templates: [],
 };
 
-const PROVIDER_FAMILIES: ProviderFamily[] = [
-	'openai',
-	'anthropic',
-	'groq',
-	'assemblyai',
-	'deepgram',
-	'revai',
-	'gemini',
-	'mistral',
-];
-
 const PROFILE_KINDS: ActiveProfileKind[] = ['desktop', 'mobile'];
-
-function globalKeyId(family: ProviderFamily): string {
-	return `global:${family}`;
-}
 
 function profileTranscriptionKeyId(kind: ActiveProfileKind): string {
 	return `profile:${kind}:transcription`;
@@ -99,10 +80,6 @@ export async function saveSettings(plugin: Plugin, settings: GlobalSettings): Pr
 
 async function hydrateSecrets(plugin: Plugin, settings: GlobalSettings): Promise<void> {
 	const all = await loadAllKeys(plugin);
-	for (const family of PROVIDER_FAMILIES) {
-		const value = all[globalKeyId(family)];
-		if (value) settings.apiKeys[family] = value;
-	}
 	for (const kind of PROFILE_KINDS) {
 		const profile = profileFor(settings, kind);
 		const trKey = all[profileTranscriptionKeyId(kind)];
@@ -114,9 +91,6 @@ async function hydrateSecrets(plugin: Plugin, settings: GlobalSettings): Promise
 
 async function persistSecrets(plugin: Plugin, settings: GlobalSettings): Promise<void> {
 	const updates: Record<string, string> = {};
-	for (const family of PROVIDER_FAMILIES) {
-		updates[globalKeyId(family)] = settings.apiKeys[family] ?? '';
-	}
 	for (const kind of PROFILE_KINDS) {
 		const profile = profileFor(settings, kind);
 		updates[profileTranscriptionKeyId(kind)] = profile.transcriptionConfig.apiKey;
@@ -128,7 +102,6 @@ async function persistSecrets(plugin: Plugin, settings: GlobalSettings): Promise
 function stripSecrets(settings: GlobalSettings): GlobalSettings {
 	return {
 		...settings,
-		apiKeys: {},
 		desktopProfile: stripProfileKeys(settings.desktopProfile),
 		mobileProfile: stripProfileKeys(settings.mobileProfile),
 	};
@@ -153,7 +126,6 @@ function mergeSettings(
 	return {
 		...base,
 		...partial,
-		apiKeys: { ...base.apiKeys, ...(partial.apiKeys ?? {}) },
 		desktopProfile: mergeProfile(base.desktopProfile, partial.desktopProfile),
 		mobileProfile: mergeProfile(base.mobileProfile, partial.mobileProfile),
 		templates: partial.templates ?? base.templates,
@@ -177,57 +149,4 @@ function mergeProfile(
 			...(partial.llmConfig ?? {}),
 		},
 	};
-}
-
-export function transcriptionProviderFamily(id: TranscriptionProviderID): ProviderFamily | null {
-	switch (id) {
-		case 'openai':
-			return 'openai';
-		case 'groq':
-			return 'groq';
-		case 'assemblyai':
-			return 'assemblyai';
-		case 'deepgram':
-			return 'deepgram';
-		case 'revai':
-			return 'revai';
-		case 'openai-compatible':
-		case 'webspeech':
-			return null;
-	}
-}
-
-export function llmProviderFamily(id: LLMProviderID): ProviderFamily | null {
-	switch (id) {
-		case 'anthropic':
-			return 'anthropic';
-		case 'openai':
-			return 'openai';
-		case 'gemini':
-			return 'gemini';
-		case 'mistral':
-			return 'mistral';
-		case 'openai-compatible':
-			return null;
-	}
-}
-
-export function resolveTranscriptionApiKey(
-	settings: GlobalSettings,
-	profile: EnvironmentProfile,
-): string {
-	if (profile.transcriptionConfig.apiKey) return profile.transcriptionConfig.apiKey;
-	const family = transcriptionProviderFamily(profile.transcriptionProvider);
-	if (!family) return '';
-	return settings.apiKeys[family] ?? '';
-}
-
-export function resolveLLMApiKey(
-	settings: GlobalSettings,
-	profile: EnvironmentProfile,
-): string {
-	if (profile.llmConfig.apiKey) return profile.llmConfig.apiKey;
-	const family = llmProviderFamily(profile.llmProvider);
-	if (!family) return '';
-	return settings.apiKeys[family] ?? '';
 }

@@ -120,7 +120,7 @@ export async function startQuickRecord(
 	const settings = plugin.settings;
 	const { profile } = resolveActiveProfile(settings);
 
-	if (!isProfileConfigured(profile, settings)) {
+	if (!isProfileConfigured(profile)) {
 		new Notice('ReWrite: profile is not configured. Finish setup to use quick record.');
 		new ReWriteModal(plugin.app, plugin).open();
 		return null;

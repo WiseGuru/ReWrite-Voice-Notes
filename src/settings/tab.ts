@@ -3,10 +3,10 @@ import type ReWritePlugin from '../main';
 import {
 	ActiveProfileKind,
 	ActiveProfileOverride,
+	EnvironmentProfile,
 	InsertMode,
 	LLMProviderID,
 	NoteTemplate,
-	ProviderFamily,
 	RecordingFormatPreference,
 	TranscriptionProviderID,
 } from '../types';
@@ -26,17 +26,6 @@ const LLM_OPTIONS: Array<{ id: LLMProviderID; label: string }> = [
 	{ id: 'anthropic', label: 'Anthropic Claude' },
 	{ id: 'openai', label: 'OpenAI GPT' },
 	{ id: 'openai-compatible', label: 'OpenAI-compatible (local server)' },
-	{ id: 'gemini', label: 'Google Gemini' },
-	{ id: 'mistral', label: 'Mistral' },
-];
-
-const PROVIDER_FAMILY_OPTIONS: Array<{ id: ProviderFamily; label: string }> = [
-	{ id: 'openai', label: 'OpenAI' },
-	{ id: 'anthropic', label: 'Anthropic' },
-	{ id: 'groq', label: 'Groq' },
-	{ id: 'assemblyai', label: 'AssemblyAI' },
-	{ id: 'deepgram', label: 'Deepgram' },
-	{ id: 'revai', label: 'Rev.ai' },
 	{ id: 'gemini', label: 'Google Gemini' },
 	{ id: 'mistral', label: 'Mistral' },
 ];
@@ -68,7 +57,6 @@ export class ReWriteSettingTab extends PluginSettingTab {
 		this.renderActiveProfile(containerEl);
 		this.renderProfile(containerEl, 'desktop');
 		this.renderProfile(containerEl, 'mobile');
-		this.renderGlobalApiKeys(containerEl);
 		this.renderTemplates(containerEl);
 		this.renderRecording(containerEl);
 	}
@@ -158,22 +146,10 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			}
 
 			new Setting(parent)
-				.setName('Transcription language')
-				.setDesc('Optional language hint. Leave blank to auto-detect.')
-				.addText((t) => {
-					t.setValue(profile.transcriptionConfig.language);
-					t.onChange(async (v) => {
-						profile.transcriptionConfig.language = v;
-						await this.commit();
-					});
-				});
-
-			new Setting(parent)
-				.setName('Transcription API key override')
-				.setDesc('Optional. Leave blank to use the global key for this provider.')
+				.setName('Transcription API key')
 				.addText((t) => {
 					t.inputEl.type = 'password';
-					t.setPlaceholder('Per-profile override');
+					t.setPlaceholder('Saved securely on this device');
 					t.setValue(profile.transcriptionConfig.apiKey);
 					t.onChange(async (v) => {
 						profile.transcriptionConfig.apiKey = v;
@@ -219,6 +195,38 @@ export class ReWriteSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(parent)
+			.setName('LLM API key')
+			.addText((t) => {
+				t.inputEl.type = 'password';
+				t.setPlaceholder('Saved securely on this device');
+				t.setValue(profile.llmConfig.apiKey);
+				t.onChange(async (v) => {
+					profile.llmConfig.apiKey = v;
+					await this.commit();
+				});
+			});
+
+		this.renderProfileAdvanced(parent, profile);
+	}
+
+	private renderProfileAdvanced(parent: HTMLElement, profile: EnvironmentProfile): void {
+		const details = parent.createEl('details', { cls: 'rewrite-advanced' });
+		details.createEl('summary', { text: 'Advanced' });
+
+		if (profile.transcriptionProvider !== 'webspeech') {
+			new Setting(details)
+				.setName('Transcription language')
+				.setDesc('Optional language hint. Leave blank to auto-detect.')
+				.addText((t) => {
+					t.setValue(profile.transcriptionConfig.language);
+					t.onChange(async (v) => {
+						profile.transcriptionConfig.language = v;
+						await this.commit();
+					});
+				});
+		}
+
+		new Setting(details)
 			.setName('LLM max tokens')
 			.setDesc('Maximum tokens for the cleanup response. Default 2048.')
 			.addText((t) => {
@@ -230,45 +238,6 @@ export class ReWriteSettingTab extends PluginSettingTab {
 					await this.commit();
 				});
 			});
-
-		new Setting(parent)
-			.setName('LLM API key override')
-			.setDesc('Optional. Leave blank to use the global key for this provider.')
-			.addText((t) => {
-				t.inputEl.type = 'password';
-				t.setPlaceholder('Per-profile override');
-				t.setValue(profile.llmConfig.apiKey);
-				t.onChange(async (v) => {
-					profile.llmConfig.apiKey = v;
-					await this.commit();
-				});
-			});
-	}
-
-	private renderGlobalApiKeys(parent: HTMLElement): void {
-		new Setting(parent).setName('Global API keys').setHeading();
-		parent.createEl('p', {
-			text: 'Shared across profiles unless overridden above. Stored securely on this device.',
-			cls: 'rewrite-section-desc',
-		});
-
-		for (const { id, label } of PROVIDER_FAMILY_OPTIONS) {
-			new Setting(parent)
-				.setName(label)
-				.addText((t) => {
-					t.inputEl.type = 'password';
-					t.setPlaceholder('Not set');
-					t.setValue(this.plugin.settings.apiKeys[id] ?? '');
-					t.onChange(async (v) => {
-						if (v) {
-							this.plugin.settings.apiKeys[id] = v;
-						} else {
-							delete this.plugin.settings.apiKeys[id];
-						}
-						await this.commit();
-					});
-				});
-		}
 	}
 
 	private renderTemplates(parent: HTMLElement): void {
