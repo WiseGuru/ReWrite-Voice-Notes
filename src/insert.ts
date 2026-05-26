@@ -1,5 +1,5 @@
-import { App, MarkdownView, moment, normalizePath, Notice, TFile } from 'obsidian';
-import { NoteTemplate } from './types';
+import { App, MarkdownView, Modal, moment, normalizePath, Notice, Setting, TFile } from 'obsidian';
+import { NewFileCollisionMode, NoteTemplate } from './types';
 
 export type InsertStage = 'cursor' | 'newFile' | 'append';
 
@@ -7,6 +7,7 @@ export interface InsertParams {
 	app: App;
 	template: NoteTemplate;
 	content: string;
+	collisionMode: NewFileCollisionMode;
 }
 
 export interface InsertResult {
@@ -60,10 +61,117 @@ async function insertNewFile(params: InsertParams): Promise<InsertResult> {
 	if (folder) {
 		await ensureFolder(params.app, folder);
 	}
-	const path = normalizePath(folder ? `${folder}/${filename}` : filename);
+	const requestedPath = normalizePath(folder ? `${folder}/${filename}` : filename);
+	const path = await resolveNewFilePath(params.app, requestedPath, params.collisionMode);
 	const file = await params.app.vault.create(path, params.content);
 	await params.app.workspace.openLinkText(file.path, '', true);
 	return { mode: 'newFile', path: file.path };
+}
+
+async function resolveNewFilePath(app: App, requestedPath: string, mode: NewFileCollisionMode): Promise<string> {
+	if (!app.vault.getAbstractFileByPath(requestedPath)) return requestedPath;
+	const nextFree = nextFreePath(app, requestedPath);
+	if (mode === 'auto') return nextFree;
+	const chosen = await promptForRename(app, requestedPath, nextFree);
+	if (chosen === null) {
+		throw new Error('Insert canceled: file already exists.');
+	}
+	if (app.vault.getAbstractFileByPath(chosen)) {
+		throw new Error(`File still exists at ${chosen}. Try again with a different name.`);
+	}
+	return chosen;
+}
+
+function nextFreePath(app: App, path: string): string {
+	const slash = path.lastIndexOf('/');
+	const dot = path.lastIndexOf('.');
+	const hasExt = dot > slash;
+	const stem = hasExt ? path.slice(0, dot) : path;
+	const ext = hasExt ? path.slice(dot) : '';
+	for (let n = 1; n < 1000; n++) {
+		const candidate = `${stem}-${n}${ext}`;
+		if (!app.vault.getAbstractFileByPath(candidate)) return candidate;
+	}
+	throw new Error(`Could not find a free filename near ${path}.`);
+}
+
+function promptForRename(app: App, conflictPath: string, suggestion: string): Promise<string | null> {
+	return new Promise((resolve) => {
+		const modal = new RenamePromptModal(app, conflictPath, suggestion, resolve);
+		modal.open();
+	});
+}
+
+class RenamePromptModal extends Modal {
+	private resolved = false;
+
+	constructor(
+		app: App,
+		private readonly conflictPath: string,
+		private readonly suggestion: string,
+		private readonly resolve: (value: string | null) => void,
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		this.modalEl.addClass('rewrite-rename-modal');
+		contentEl.createEl('h2', { text: 'File already exists' });
+		contentEl.createEl('p', { text: `A file already exists at ${this.conflictPath}. Choose a new path.` });
+
+		let value = this.suggestion;
+		new Setting(contentEl)
+			.setName('New path')
+			.addText((t) => {
+				t.setValue(this.suggestion);
+				t.inputEl.addClass('rewrite-rename-input');
+				t.onChange((v) => {
+					value = v;
+				});
+				window.setTimeout(() => {
+					t.inputEl.focus();
+					const dot = this.suggestion.lastIndexOf('.');
+					const slash = this.suggestion.lastIndexOf('/');
+					const end = dot > slash ? dot : this.suggestion.length;
+					t.inputEl.setSelectionRange(slash + 1, end);
+				}, 0);
+				t.inputEl.addEventListener('keydown', (e) => {
+					if (e.key === 'Enter') {
+						e.preventDefault();
+						this.finish(value);
+					}
+				});
+			});
+
+		new Setting(contentEl)
+			.addButton((b) => {
+				b.setButtonText('Save').setCta().onClick(() => this.finish(value));
+			})
+			.addButton((b) => {
+				b.setButtonText('Cancel').onClick(() => this.finish(null));
+			});
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+		if (!this.resolved) {
+			this.resolved = true;
+			this.resolve(null);
+		}
+	}
+
+	private finish(value: string | null): void {
+		if (this.resolved) return;
+		const trimmed = value === null ? null : normalizePath(value.trim());
+		if (trimmed !== null && trimmed.length === 0) {
+			new Notice('Path cannot be empty.');
+			return;
+		}
+		this.resolved = true;
+		this.resolve(trimmed);
+		this.close();
+	}
 }
 
 function expandFilenameTemplate(template: string): string {

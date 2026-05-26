@@ -8,16 +8,31 @@
 }
 
 .rewrite-modal .rewrite-destination-row {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
 	margin-bottom: 12px;
 	padding: 8px;
 	border: 1px dashed var(--background-modifier-border);
 	border-radius: 4px;
 }
 
-.rewrite-modal .rewrite-destination-row .rewrite-destination-sublabel {
+.rewrite-modal .rewrite-destination-summary {
+	cursor: pointer;
+	user-select: none;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+
+.rewrite-modal .rewrite-destination-summary-value {
+	color: var(--text-normal);
+}
+
+.rewrite-modal .rewrite-destination-body {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-top: 8px;
+}
+
+.rewrite-modal .rewrite-destination-body .rewrite-destination-sublabel {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
@@ -25,7 +40,7 @@
 	color: var(--text-muted);
 }
 
-.rewrite-modal .rewrite-destination-row input[type="text"] {
+.rewrite-modal .rewrite-destination-body input[type="text"] {
 	width: 100%;
 }
 
@@ -355,5 +370,12 @@
 
 .rewrite-locked-card {
 	border-color: var(--color-red);
+}
+
+/* Rename prompt modal (new-file collision) */
+
+.rewrite-rename-modal .rewrite-rename-input {
+	width: 100%;
+	font-family: var(--font-monospace);
 }
 

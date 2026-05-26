@@ -55,6 +55,7 @@ export const DEFAULT_SETTINGS: GlobalSettings = {
 	recordingFormat: 'webm',
 	templatesFolderPath: 'ReWrite/Templates',
 	attachmentsFolderPath: '',
+	newFileCollisionMode: 'auto',
 	adHocInstructionsEnabled: false,
 	assistantName: 'Scrivener',
 	assistantPromptPath: 'ReWrite/AssistantPrompt.md',

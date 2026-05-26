@@ -67,6 +67,7 @@ export interface EnvironmentProfile {
 export type ActiveProfileOverride = 'auto' | 'desktop' | 'mobile';
 export type ActiveProfileKind = 'desktop' | 'mobile';
 export type RecordingFormatPreference = 'webm' | 'mp4';
+export type NewFileCollisionMode = 'auto' | 'prompt';
 
 export interface ModelCacheEntry {
 	ids: string[];
@@ -94,6 +95,7 @@ export interface GlobalSettings {
 	recordingFormat: RecordingFormatPreference;
 	templatesFolderPath: string;
 	attachmentsFolderPath: string;
+	newFileCollisionMode: NewFileCollisionMode;
 	adHocInstructionsEnabled: boolean;
 	assistantName: string;
 	assistantPromptPath: string;

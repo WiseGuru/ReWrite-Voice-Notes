@@ -17,6 +17,7 @@ export class ReWriteModal extends Modal {
 	private running = false;
 	private currentSource: PipelineSource | null = null;
 	private destinationOverride: DestinationOverride | null = null;
+	private destinationExpanded = false;
 
 	constructor(
 		app: App,
@@ -156,6 +157,7 @@ export class ReWriteModal extends Modal {
 		select.addEventListener('change', () => {
 			this.templateId = select.value;
 			this.destinationOverride = null;
+			this.destinationExpanded = false;
 			this.render();
 		});
 	}
@@ -166,10 +168,24 @@ export class ReWriteModal extends Modal {
 		const effectiveMode = this.destinationOverride?.insertMode ?? template.insertMode;
 		const effectiveFolder = this.destinationOverride?.newFileFolder ?? template.newFileFolder;
 		const effectiveName = this.destinationOverride?.newFileNameTemplate ?? template.newFileNameTemplate;
+		const hasOverride = this.destinationOverride !== null;
 
-		const wrap = parent.createDiv({ cls: 'rewrite-destination-row' });
-		wrap.createEl('label', { text: 'Destination' });
-		const select = wrap.createEl('select');
+		const details = parent.createEl('details', { cls: 'rewrite-destination-row' });
+		details.open = this.destinationExpanded || hasOverride;
+		details.addEventListener('toggle', () => {
+			this.destinationExpanded = details.open;
+		});
+
+		const summary = details.createEl('summary', { cls: 'rewrite-destination-summary' });
+		const summaryLabel = hasOverride ? 'Custom destination' : 'Default destination';
+		summary.createSpan({ cls: 'rewrite-destination-summary-label', text: `${summaryLabel}: ` });
+		summary.createSpan({
+			cls: 'rewrite-destination-summary-value',
+			text: describeDestination(effectiveMode, effectiveFolder, effectiveName),
+		});
+
+		const body = details.createDiv({ cls: 'rewrite-destination-body' });
+		const select = body.createEl('select');
 		const modes: Array<{ id: InsertMode; label: string }> = [
 			{ id: 'cursor', label: 'Cursor (active editor)' },
 			{ id: 'newFile', label: 'New file' },
@@ -182,11 +198,12 @@ export class ReWriteModal extends Modal {
 		}
 		select.addEventListener('change', () => {
 			this.setDestinationOverride({ insertMode: select.value as InsertMode });
+			this.destinationExpanded = true;
 			this.render();
 		});
 
 		if (effectiveMode === 'newFile') {
-			const folderLabel = wrap.createEl('label', { text: 'Folder', cls: 'rewrite-destination-sublabel' });
+			const folderLabel = body.createEl('label', { text: 'Folder', cls: 'rewrite-destination-sublabel' });
 			const folderInput = folderLabel.createEl('input', { type: 'text' });
 			folderInput.value = effectiveFolder;
 			folderInput.placeholder = '(vault root)';
@@ -194,7 +211,7 @@ export class ReWriteModal extends Modal {
 				this.setDestinationOverride({ newFileFolder: folderInput.value });
 			});
 
-			const nameLabel = wrap.createEl('label', { text: 'Filename template', cls: 'rewrite-destination-sublabel' });
+			const nameLabel = body.createEl('label', { text: 'Filename template', cls: 'rewrite-destination-sublabel' });
 			const nameInput = nameLabel.createEl('input', { type: 'text' });
 			nameInput.value = effectiveName;
 			nameInput.placeholder = 'ReWrite {{date}} {{time}}';
@@ -204,9 +221,10 @@ export class ReWriteModal extends Modal {
 		}
 
 		if (this.destinationOverride) {
-			const reset = wrap.createEl('button', { text: 'Reset to template default', cls: 'rewrite-destination-reset' });
+			const reset = body.createEl('button', { text: 'Reset to template default', cls: 'rewrite-destination-reset' });
 			reset.addEventListener('click', () => {
 				this.destinationOverride = null;
+				this.destinationExpanded = false;
 				this.render();
 			});
 		}
@@ -488,4 +506,18 @@ function formatDuration(ms: number): string {
 	const minutes = Math.floor(total / 60);
 	const seconds = total % 60;
 	return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function describeDestination(mode: InsertMode, folder: string, nameTemplate: string): string {
+	switch (mode) {
+		case 'cursor':
+			return 'Cursor (active editor)';
+		case 'append':
+			return 'Append to active note';
+		case 'newFile': {
+			const folderPart = folder.trim() || '(vault root)';
+			const namePart = nameTemplate.trim() || 'ReWrite {{date}} {{time}}';
+			return `New file: ${folderPart}/${namePart}`;
+		}
+	}
 }

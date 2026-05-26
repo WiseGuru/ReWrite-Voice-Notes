@@ -6,6 +6,7 @@ import {
 	EnvironmentProfile,
 	LLMConfig,
 	LLMProviderID,
+	NewFileCollisionMode,
 	RecordingFormatPreference,
 	TranscriptionConfig,
 	TranscriptionProviderID,
@@ -666,6 +667,22 @@ export class ReWriteSettingTab extends PluginSettingTab {
 					});
 				});
 		}
+
+		new Setting(parent)
+			.setName('On filename collision')
+			.setDesc('What to do when a new-file template targets a path that already exists.')
+			.addDropdown((dd) => {
+				const opts: Array<{ id: NewFileCollisionMode; label: string }> = [
+					{ id: 'auto', label: 'Auto-iterate (-1, -2, ...)' },
+					{ id: 'prompt', label: 'Prompt for a new name' },
+				];
+				for (const opt of opts) dd.addOption(opt.id, opt.label);
+				dd.setValue(s.newFileCollisionMode);
+				dd.onChange(async (v) => {
+					s.newFileCollisionMode = v as NewFileCollisionMode;
+					await this.commit();
+				});
+			});
 	}
 
 	private renderRecording(parent: HTMLElement): void {

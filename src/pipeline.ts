@@ -64,6 +64,7 @@ export async function runPipeline(params: PipelineParams): Promise<PipelineResul
 		app: params.app,
 		template: applyDestinationOverride(params.template, params.destinationOverride),
 		content: finalContent,
+		collisionMode: params.settings.newFileCollisionMode,
 	});
 
 	return { transcript, cleaned: finalContent, insert };
