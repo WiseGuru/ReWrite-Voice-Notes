@@ -47,8 +47,13 @@ When you click Start in settings, the plugin launches whisper-server as a child 
 
 ### Setup
 
-1. Download or build whisper.cpp. The repo's [releases page](https://github.com/ggerganov/whisper.cpp/releases) ships prebuilt `whisper-server` binaries for common platforms; or `make server` from a clone.
-2. Download a GGML model file (e.g. `ggml-base.en.bin`, `ggml-small.bin`, `ggml-large-v3.bin`) from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp/tree/main). Larger models are more accurate and slower.
+1. Obtain a `whisper-server` binary:
+   - **Windows**: download the latest `whisper-bin-x64.zip` (CPU) or `whisper-cublas-12.4.0-bin-x64.zip` (NVIDIA GPU) from the [whisper.cpp releases page](https://github.com/ggerganov/whisper.cpp/releases), unzip somewhere stable (e.g. `C:\Tools\whisper.cpp\`), and use the path to `whisper-server.exe` inside that folder.
+   - **macOS**: the easiest path is Homebrew (`brew install whisper-cpp`), which installs a `whisper-server` binary; `which whisper-server` will show its absolute path. Or build from source the same way as Linux below.
+   - **Linux**: there are no official Linux binaries on the releases page, so you build from source once. See "Building whisper-server on Linux" just below.
+2. Download a GGML model file. Two sources work out of the box:
+   - **Upstream GGML models** from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp/tree/main), e.g. `ggml-base.en.bin`, `ggml-small.bin`, `ggml-large-v3.bin`. Larger models are more accurate and slower.
+   - **FUTO whisper-acft models** (see the next section). These are quantized, finetuned variants that support dynamic audio context; they load with the same `-m` flag as upstream models.
 3. Open ReWrite settings, scroll to "Local whisper.cpp server (desktop)", and fill in:
    - Binary path: absolute path to `whisper-server` (or `whisper-server.exe` on Windows).
    - Model path: absolute path to the `.bin` file.
@@ -56,12 +61,85 @@ When you click Start in settings, the plugin launches whisper-server as a child 
 4. Click Start. The status indicator transitions from Stopped to Starting to Running. View log shows whisper-server's stdout/stderr if startup fails.
 5. In the profile you want to use it from, set Transcription provider to "Local whisper.cpp (desktop only)". The Transcription model field is decorative for this provider; whisper-server uses whichever model file is loaded at startup.
 
+### Building `whisper-server` on Linux
+
+whisper.cpp doesn't publish prebuilt Linux binaries, so you need to compile it once. The build is quick (under a minute on a modern laptop) and produces a single executable that you then point the plugin at.
+
+1. Install the toolchain. Pick the line for your distro:
+   - Debian / Ubuntu / Mint: `sudo apt update && sudo apt install -y build-essential cmake git`
+   - Fedora / RHEL: `sudo dnf install -y gcc-c++ make cmake git`
+   - Arch / Manjaro: `sudo pacman -S --needed base-devel cmake git`
+   - openSUSE: `sudo zypper install -y gcc-c++ make cmake git`
+
+2. Clone and build:
+
+   ```bash
+   git clone https://github.com/ggerganov/whisper.cpp.git
+   cd whisper.cpp
+   cmake -B build -DCMAKE_BUILD_TYPE=Release
+   cmake --build build -j --config Release
+   ```
+
+   The default build includes the `server` example, so no extra flags are needed. If you have an NVIDIA GPU and want CUDA acceleration, replace the first `cmake` line with `cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON` (requires the CUDA toolkit installed; the build takes substantially longer).
+
+3. After the build finishes, the binary lives at:
+
+   ```
+   <path-to-clone>/build/bin/whisper-server
+   ```
+
+   Copy or symlink it somewhere stable (e.g. `~/.local/bin/whisper-server`) if you want to keep the absolute path short. Make sure it is executable: `chmod +x build/bin/whisper-server`.
+
+4. Use that absolute path as Binary path in the plugin's "Local whisper.cpp server (desktop)" settings section. To sanity-check the binary outside the plugin first, run it once from a terminal with a model file: `./build/bin/whisper-server -m /path/to/model.bin --port 8080`. You should see `whisper server listening at http://127.0.0.1:8080`. Hit Ctrl-C to stop, then let the plugin manage it from there.
+
+If `cmake --build` fails with `error: 'std::filesystem' has not been declared` or similar C++17 errors, your distro's default GCC is too old. Install a newer one (`sudo apt install g++-12` on Ubuntu) and rerun the `cmake -B build ...` step with `-DCMAKE_CXX_COMPILER=g++-12` appended.
+
+### FUTO whisper-acft models
+
+[whisper-acft](https://github.com/futo-org/whisper-acft) is a set of Whisper checkpoints finetuned by FUTO so that whisper.cpp's encoder tolerates a dynamic `audio_ctx` (the number of audio frames the encoder processes). With stock Whisper models, lowering `audio_ctx` to match shorter clips makes the decoder unstable; the ACFT models were retrained to handle this gracefully, which can cut latency on short utterances substantially (often a 2x to 4x speedup on the small models, depending on hardware).
+
+The published checkpoints are quantized to `q8_0` and ship in the same GGML container that whisper.cpp's `-m` flag already accepts, so no special build of whisper-server is required. You just need a whisper.cpp version recent enough to recognize the `-ac` / `--audio-context` flag (any reasonably current `whisper-server` release does).
+
+1. Pick a model and download the `.bin` directly. English-only checkpoints are smaller and faster for English input; multilingual handles other languages but is slightly slower at the same size.
+
+   English-only:
+   - tiny.en: `https://voiceinput.futo.org/VoiceInput/tiny_en_acft_q8_0.bin`
+   - base.en: `https://voiceinput.futo.org/VoiceInput/base_en_acft_q8_0.bin`
+   - small.en: `https://voiceinput.futo.org/VoiceInput/small_en_acft_q8_0.bin`
+
+   Multilingual:
+   - tiny: `https://voiceinput.futo.org/VoiceInput/tiny_acft_q8_0.bin`
+   - base: `https://voiceinput.futo.org/VoiceInput/base_acft_q8_0.bin`
+   - small: `https://voiceinput.futo.org/VoiceInput/small_acft_q8_0.bin`
+
+   Save the file anywhere you like (the same folder as your other GGML models is fine). Verify the download finished cleanly before pointing the plugin at it; a truncated `.bin` will fail to load with a cryptic error in the log tail.
+
+2. In ReWrite settings under "Local whisper.cpp server (desktop)", set Model path to the absolute path of the FUTO `.bin` you just downloaded. Binary path and Port are unchanged from the standard setup above.
+
+3. Expand the "Advanced" disclosure inside that section and set Extra args to:
+
+   ```
+   -ac 768
+   ```
+
+   `-ac` (alias `--audio-context`) caps the encoder context at the given number of mel frames. Lower values run faster but only stay accurate on ACFT-finetuned models, which is the whole point of using them. A few starting points:
+
+   - `-ac 768` is a sensible default for short to medium clips (roughly up to ~15 s). Drop to `-ac 512` for short voice memos under ~10 s.
+   - `-ac 1500` (the whisper.cpp default for 30 s of audio) disables the speedup. Use this if you regularly dictate longer than ~20 s and notice the tail being cut off.
+   - You can pass additional flags on the same line, space-separated, e.g. `-ac 768 -t 4` to also cap CPU threads at 4.
+
+4. Click Start (or Restart if the host was already running). The status pill should return to Running and the View log output should show whisper-server loading the ACFT model file. From the consuming profile, the Local whisper.cpp transcription provider needs no changes; it forwards the audio over the same `/v1/audio/transcriptions` endpoint and the `-ac` value is applied server-side.
+
+If transcription quality drops noticeably (truncated sentences, missing trailing words), raise `-ac` toward 1500 until it stabilizes. The right value depends on how long your typical recording is; there is no single best number.
+
 ### Troubleshooting
 
 - **Port already in use**: another process is bound to the configured port. Change the port (or stop the other process). The plugin will not kill processes it did not start.
 - **Antivirus quarantine on Windows**: Windows Defender or third-party AV may flag `whisper-server.exe` on first run. The plugin cannot work around this; whitelist the binary in your AV settings.
 - **Permission denied on macOS or Linux**: ensure the binary is executable (`chmod +x whisper-server`).
 - **Process did not become ready within 5 s**: the model failed to load (file path wrong, file corrupted, RAM exhausted). The log tail will show whisper.cpp's error.
+- **`unknown argument: -ac` (or `--audio-context`) in the log**: your `whisper-server` build predates the dynamic audio-context flag. Update to a current whisper.cpp release, or remove the `-ac` value from Extra args (you can still use the FUTO model files without the flag, you just lose the latency benefit).
+- **FUTO model loads but transcripts are truncated or jumbled**: `-ac` is set too low for the length of audio you are dictating. Raise it (e.g. `768` to `1024` to `1500`) until the output is stable.
 
 ## Excluding `secrets.json.nosync` from sync
 

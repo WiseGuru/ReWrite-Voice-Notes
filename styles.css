@@ -7,6 +7,38 @@
 	margin-bottom: 12px;
 }
 
+.rewrite-modal .rewrite-destination-row {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-bottom: 12px;
+	padding: 8px;
+	border: 1px dashed var(--background-modifier-border);
+	border-radius: 4px;
+}
+
+.rewrite-modal .rewrite-destination-row .rewrite-destination-sublabel {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+
+.rewrite-modal .rewrite-destination-row input[type="text"] {
+	width: 100%;
+}
+
+.rewrite-modal .rewrite-destination-reset {
+	align-self: flex-start;
+	font-size: var(--font-ui-small);
+	background: transparent;
+	border: none;
+	color: var(--text-accent);
+	cursor: pointer;
+	padding: 0;
+}
+
 .rewrite-modal .rewrite-tabs {
 	display: flex;
 	gap: 8px;
@@ -57,6 +89,13 @@
 	font-family: var(--font-text);
 }
 
+.rewrite-settings-textarea {
+	width: 100%;
+	min-height: 80px;
+	font-family: var(--font-text);
+	resize: vertical;
+}
+
 .rewrite-modal .rewrite-progress {
 	margin-top: 12px;
 	font-style: italic;
@@ -89,77 +128,6 @@
 	font-size: var(--font-ui-small);
 	margin-top: -4px;
 	margin-bottom: 8px;
-}
-
-.rewrite-settings .rewrite-templates-list {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	margin-bottom: 12px;
-}
-
-.rewrite-settings .rewrite-templates-empty {
-	color: var(--text-muted);
-	font-style: italic;
-}
-
-.rewrite-settings .rewrite-template-item {
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	padding: 8px;
-	background-color: var(--background-secondary);
-}
-
-.rewrite-settings .rewrite-template-item.is-dragging {
-	opacity: 0.4;
-}
-
-.rewrite-settings .rewrite-template-item.is-drop-target {
-	border-color: var(--interactive-accent);
-	box-shadow: 0 0 0 1px var(--interactive-accent);
-}
-
-.rewrite-settings .rewrite-template-header {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-}
-
-.rewrite-settings .rewrite-drag-handle {
-	cursor: grab;
-	user-select: none;
-	color: var(--text-muted);
-	padding: 0 4px;
-}
-
-.rewrite-settings .rewrite-drag-handle:active {
-	cursor: grabbing;
-}
-
-.rewrite-settings .rewrite-template-name {
-	flex: 1;
-	font-weight: var(--font-semibold);
-}
-
-.rewrite-settings .rewrite-template-actions {
-	display: flex;
-	gap: 4px;
-}
-
-.rewrite-settings .rewrite-template-editor {
-	margin-top: 8px;
-	padding-top: 8px;
-	border-top: 1px solid var(--background-modifier-border);
-}
-
-.rewrite-settings .rewrite-prompt-textarea {
-	width: 100%;
-	min-height: 120px;
-	font-family: var(--font-text);
-}
-
-.rewrite-settings .rewrite-templates-actions {
-	margin-top: 8px;
 }
 
 /* Quick record floating mini-UI */
@@ -200,6 +168,192 @@
 }
 
 .rewrite-quick-floater .rewrite-quick-stop,
-.rewrite-quick-floater .rewrite-quick-cancel {
+.rewrite-quick-floater .rewrite-quick-cancel,
+.rewrite-quick-floater .rewrite-quick-template {
 	padding: 2px 8px;
 }
+
+.rewrite-quick-floater .rewrite-quick-template {
+	max-width: 14ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.rewrite-quick-floater .rewrite-quick-popover {
+	position: absolute;
+	bottom: calc(100% + 6px);
+	right: 0;
+	display: flex;
+	flex-direction: column;
+	min-width: 180px;
+	max-height: 240px;
+	overflow-y: auto;
+	padding: 4px;
+	background-color: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	box-shadow: var(--shadow-s);
+	z-index: 10000;
+}
+
+.rewrite-quick-floater .rewrite-quick-popover-item {
+	text-align: left;
+	padding: 4px 8px;
+	background: transparent;
+	border: none;
+	cursor: pointer;
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	border-radius: 4px;
+}
+
+.rewrite-quick-floater .rewrite-quick-popover-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.rewrite-quick-floater .rewrite-quick-popover-item.is-active {
+	color: var(--text-on-accent);
+	background-color: var(--interactive-accent);
+}
+
+/* Status bar */
+
+.rewrite-status-bar {
+	display: inline-flex;
+	gap: 6px;
+	align-items: center;
+	cursor: pointer;
+}
+
+.rewrite-status-bar .rewrite-status-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background-color: var(--text-muted);
+}
+
+.rewrite-status-bar .rewrite-status-dot.is-stopped {
+	background-color: var(--text-muted);
+}
+
+.rewrite-status-bar .rewrite-status-dot.is-starting {
+	background-color: var(--color-yellow);
+}
+
+.rewrite-status-bar .rewrite-status-dot.is-running {
+	background-color: var(--color-green);
+}
+
+.rewrite-status-bar .rewrite-status-dot.is-external {
+	background-color: var(--color-orange);
+}
+
+.rewrite-status-bar .rewrite-status-dot.is-crashed {
+	background-color: var(--color-red);
+}
+
+.rewrite-hidden {
+	display: none !important;
+}
+
+/* Encryption banner (settings tab) */
+
+.rewrite-encryption-banner {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 12px;
+	margin-bottom: 16px;
+	border-radius: 6px;
+	border: 1px solid var(--background-modifier-border);
+	background-color: var(--background-secondary);
+	font-size: var(--font-ui-small);
+}
+
+.rewrite-encryption-banner.is-ok {
+	border-color: var(--color-green);
+}
+
+.rewrite-encryption-banner.is-warning {
+	border-color: var(--color-yellow);
+	background-color: rgba(255, 196, 0, 0.08);
+}
+
+.rewrite-encryption-banner.is-locked {
+	border-color: var(--color-red);
+	background-color: rgba(255, 80, 80, 0.08);
+}
+
+.rewrite-encryption-banner button {
+	margin-left: auto;
+}
+
+/* Passphrase modal */
+
+.rewrite-passphrase-modal .rewrite-passphrase-desc {
+	color: var(--text-muted);
+	margin-bottom: 12px;
+}
+
+.rewrite-passphrase-modal .rewrite-passphrase-input {
+	width: 100%;
+	font-family: var(--font-monospace);
+}
+
+.rewrite-passphrase-modal .rewrite-passphrase-warning {
+	color: var(--text-warning, var(--color-yellow));
+	font-size: var(--font-ui-small);
+	margin-top: 8px;
+}
+
+.rewrite-passphrase-modal .rewrite-passphrase-tips {
+	background-color: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	padding: 10px 14px;
+	margin-bottom: 12px;
+	font-size: var(--font-ui-small);
+}
+
+.rewrite-passphrase-modal .rewrite-passphrase-tips strong {
+	display: block;
+	margin-bottom: 6px;
+}
+
+.rewrite-passphrase-modal .rewrite-passphrase-tips ul {
+	margin: 0;
+	padding-left: 18px;
+}
+
+.rewrite-passphrase-modal .rewrite-passphrase-tips li {
+	margin-bottom: 4px;
+}
+
+.rewrite-passphrase-modal .rewrite-passphrase-tips code {
+	font-size: 0.9em;
+	padding: 1px 4px;
+	background-color: var(--background-primary);
+	border-radius: 3px;
+}
+
+.rewrite-passphrase-modal .rewrite-passphrase-error {
+	color: var(--text-error, var(--color-red));
+	font-size: var(--font-ui-small);
+	margin-top: 8px;
+}
+
+.rewrite-passphrase-modal .rewrite-passphrase-actions {
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+	margin-top: 16px;
+}
+
+/* Locked card in the main modal */
+
+.rewrite-locked-card {
+	border-color: var(--color-red);
+}
+

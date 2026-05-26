@@ -30,6 +30,11 @@ export async function runTextPipeline(
 ): Promise<void> {
 	const settings = plugin.settings;
 	const { profile } = resolveActiveProfile(settings);
+	if (plugin.encryptionStatus.locked) {
+		new Notice('ReWrite: API keys are locked. Unlock to process text.');
+		plugin.promptUnlock();
+		return;
+	}
 	if (!isProfileConfiguredForText(profile)) {
 		new Notice('ReWrite: configure an LLM provider before processing text.');
 		new ReWriteModal(plugin.app, plugin).open();
@@ -40,6 +45,7 @@ export async function runTextPipeline(
 		await runPipeline({
 			app: plugin.app,
 			settings,
+			host: plugin,
 			profile,
 			template,
 			source: { kind: 'text', text },

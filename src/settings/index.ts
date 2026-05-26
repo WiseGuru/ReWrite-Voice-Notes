@@ -8,7 +8,6 @@ import {
 	TranscriptionConfig,
 } from '../types';
 import { loadAllKeys, saveManyKeys } from '../secrets';
-import { freshDefaultTemplates } from './default-templates';
 
 const EMPTY_TRANSCRIPTION_CONFIG: TranscriptionConfig = {
 	apiKey: '',
@@ -54,7 +53,12 @@ export const DEFAULT_SETTINGS: GlobalSettings = {
 	defaultTemplateId: '',
 	lastUsedTemplateId: '',
 	recordingFormat: 'webm',
-	templates: [],
+	templatesFolderPath: 'ReWrite/Templates',
+	attachmentsFolderPath: '',
+	adHocInstructionsEnabled: false,
+	assistantName: 'Scrivener',
+	assistantPromptPath: 'ReWrite/AssistantPrompt.md',
+	knownNounsPath: 'ReWrite/KnownNouns.md',
 	modelCache: { transcription: {}, llm: {} },
 	localWhisper: DEFAULT_LOCAL_WHISPER,
 };
@@ -72,12 +76,6 @@ function profileLLMKeyId(kind: ActiveProfileKind): string {
 export async function loadSettings(plugin: Plugin): Promise<GlobalSettings> {
 	const stored = (await plugin.loadData()) as Partial<GlobalSettings> | null;
 	const merged = mergeSettings(DEFAULT_SETTINGS, stored ?? {});
-	if (merged.templates.length === 0) {
-		merged.templates = freshDefaultTemplates();
-		if (!merged.defaultTemplateId) {
-			merged.defaultTemplateId = merged.templates[0]?.id ?? '';
-		}
-	}
 	await hydrateSecrets(plugin, merged);
 	return merged;
 }
@@ -88,14 +86,14 @@ export async function saveSettings(plugin: Plugin, settings: GlobalSettings): Pr
 	await plugin.saveData(stripped);
 }
 
-async function hydrateSecrets(plugin: Plugin, settings: GlobalSettings): Promise<void> {
+export async function hydrateSecrets(plugin: Plugin, settings: GlobalSettings): Promise<void> {
 	const all = await loadAllKeys(plugin);
 	for (const kind of PROFILE_KINDS) {
 		const profile = profileFor(settings, kind);
 		const trKey = all[profileTranscriptionKeyId(kind)];
-		if (trKey) profile.transcriptionConfig.apiKey = trKey;
+		profile.transcriptionConfig.apiKey = trKey ?? '';
 		const llmKey = all[profileLLMKeyId(kind)];
-		if (llmKey) profile.llmConfig.apiKey = llmKey;
+		profile.llmConfig.apiKey = llmKey ?? '';
 	}
 }
 
@@ -138,7 +136,6 @@ function mergeSettings(
 		...partial,
 		desktopProfile: mergeProfile(base.desktopProfile, partial.desktopProfile),
 		mobileProfile: mergeProfile(base.mobileProfile, partial.mobileProfile),
-		templates: partial.templates ?? base.templates,
 		modelCache: {
 			transcription: { ...base.modelCache.transcription, ...(partial.modelCache?.transcription ?? {}) },
 			llm: { ...base.modelCache.llm, ...(partial.modelCache?.llm ?? {}) },

@@ -4,7 +4,7 @@ import { runPipeline, PipelineSource, PipelineStage } from '../pipeline';
 import { isMediaRecorderAvailable, isWebSpeechAvailable, resolveActiveProfile } from '../platform';
 import { Recorder } from '../recorder';
 import { startWebSpeech, WebSpeechSession } from '../webspeech';
-import { EnvironmentProfile } from '../types';
+import { DestinationOverride, EnvironmentProfile, InsertMode, NoteTemplate } from '../types';
 import { isProfileConfigured, isProfileConfiguredForText, renderSetupCard } from './setup-card';
 import { resolveActiveTextSource } from './text-source';
 
@@ -16,6 +16,7 @@ export class ReWriteModal extends Modal {
 	private timerHandle: number | null = null;
 	private running = false;
 	private currentSource: PipelineSource | null = null;
+	private destinationOverride: DestinationOverride | null = null;
 
 	constructor(
 		app: App,
@@ -38,13 +39,14 @@ export class ReWriteModal extends Modal {
 
 	private pickDefaultTemplateId(): string {
 		const s = this.plugin.settings;
-		if (s.lastUsedTemplateId && s.templates.some((t) => t.id === s.lastUsedTemplateId)) {
+		const templates = this.plugin.templates;
+		if (s.lastUsedTemplateId && templates.some((t) => t.id === s.lastUsedTemplateId)) {
 			return s.lastUsedTemplateId;
 		}
-		if (s.defaultTemplateId && s.templates.some((t) => t.id === s.defaultTemplateId)) {
+		if (s.defaultTemplateId && templates.some((t) => t.id === s.defaultTemplateId)) {
 			return s.defaultTemplateId;
 		}
-		return s.templates[0]?.id ?? '';
+		return templates[0]?.id ?? '';
 	}
 
 	private render(): void {
@@ -55,9 +57,9 @@ export class ReWriteModal extends Modal {
 		const { kind, profile } = resolveActiveProfile(this.plugin.settings);
 		const profileLabel = kind === 'desktop' ? 'Desktop' : 'Mobile';
 
-		if (this.plugin.settings.templates.length === 0) {
+		if (this.plugin.templates.length === 0) {
 			contentEl.createEl('p', {
-				text: 'No templates are configured. Open settings to add one.',
+				text: 'No templates are configured. Open settings to set up your templates folder.',
 			});
 			const btn = contentEl.createEl('button', { text: 'Open settings' });
 			btn.addEventListener('click', () => {
@@ -68,8 +70,14 @@ export class ReWriteModal extends Modal {
 		}
 
 		this.renderTemplateSelector(contentEl);
+		this.renderDestinationSelector(contentEl);
 		this.renderTabBar(contentEl);
 		const tabBody = contentEl.createDiv({ cls: 'rewrite-tab-body' });
+
+		if (this.plugin.encryptionStatus.locked) {
+			this.renderLockedBanner(tabBody);
+			return;
+		}
 
 		if (this.activeTab === 'fromNote') {
 			if (!isProfileConfiguredForText(profile)) {
@@ -114,22 +122,113 @@ export class ReWriteModal extends Modal {
 		});
 	}
 
+	private renderLockedBanner(parent: HTMLElement): void {
+		const card = parent.createDiv({ cls: 'rewrite-setup-card rewrite-locked-card' });
+		card.createEl('h3', { text: 'API keys are locked' });
+		card.createEl('p', {
+			text: 'Your API keys are encrypted with a passphrase. Unlock them to record or process text.',
+		});
+		const actions = card.createDiv({ cls: 'rewrite-setup-actions' });
+		const unlockBtn = actions.createEl('button', { text: 'Unlock', cls: 'mod-cta' });
+		unlockBtn.addEventListener('click', () => {
+			this.plugin.promptUnlock(() => this.render());
+		});
+		const settingsBtn = actions.createEl('button', { text: 'Open settings' });
+		settingsBtn.addEventListener('click', () => {
+			this.close();
+			this.openSettingsTab();
+		});
+	}
+
 	private renderTemplateSelector(parent: HTMLElement): void {
 		const wrap = parent.createDiv({ cls: 'rewrite-template-row' });
 		wrap.createEl('label', { text: 'Template' });
 		const select = wrap.createEl('select');
-		const ids = this.plugin.settings.templates.map((t) => t.id);
+		const ids = this.plugin.templates.map((t) => t.id);
 		if (!ids.includes(this.templateId)) {
 			this.templateId = ids[0] ?? '';
 		}
-		for (const t of this.plugin.settings.templates) {
+		for (const t of this.plugin.templates) {
 			const opt = select.createEl('option', { text: t.name });
 			opt.value = t.id;
 			if (t.id === this.templateId) opt.selected = true;
 		}
 		select.addEventListener('change', () => {
 			this.templateId = select.value;
+			this.destinationOverride = null;
+			this.render();
 		});
+	}
+
+	private renderDestinationSelector(parent: HTMLElement): void {
+		const template = this.activeTemplate();
+		if (!template) return;
+		const effectiveMode = this.destinationOverride?.insertMode ?? template.insertMode;
+		const effectiveFolder = this.destinationOverride?.newFileFolder ?? template.newFileFolder;
+		const effectiveName = this.destinationOverride?.newFileNameTemplate ?? template.newFileNameTemplate;
+
+		const wrap = parent.createDiv({ cls: 'rewrite-destination-row' });
+		wrap.createEl('label', { text: 'Destination' });
+		const select = wrap.createEl('select');
+		const modes: Array<{ id: InsertMode; label: string }> = [
+			{ id: 'cursor', label: 'Cursor (active editor)' },
+			{ id: 'newFile', label: 'New file' },
+			{ id: 'append', label: 'Append to active note' },
+		];
+		for (const m of modes) {
+			const opt = select.createEl('option', { text: m.label });
+			opt.value = m.id;
+			if (m.id === effectiveMode) opt.selected = true;
+		}
+		select.addEventListener('change', () => {
+			this.setDestinationOverride({ insertMode: select.value as InsertMode });
+			this.render();
+		});
+
+		if (effectiveMode === 'newFile') {
+			const folderLabel = wrap.createEl('label', { text: 'Folder', cls: 'rewrite-destination-sublabel' });
+			const folderInput = folderLabel.createEl('input', { type: 'text' });
+			folderInput.value = effectiveFolder;
+			folderInput.placeholder = '(vault root)';
+			folderInput.addEventListener('change', () => {
+				this.setDestinationOverride({ newFileFolder: folderInput.value });
+			});
+
+			const nameLabel = wrap.createEl('label', { text: 'Filename template', cls: 'rewrite-destination-sublabel' });
+			const nameInput = nameLabel.createEl('input', { type: 'text' });
+			nameInput.value = effectiveName;
+			nameInput.placeholder = 'ReWrite {{date}} {{time}}';
+			nameInput.addEventListener('change', () => {
+				this.setDestinationOverride({ newFileNameTemplate: nameInput.value });
+			});
+		}
+
+		if (this.destinationOverride) {
+			const reset = wrap.createEl('button', { text: 'Reset to template default', cls: 'rewrite-destination-reset' });
+			reset.addEventListener('click', () => {
+				this.destinationOverride = null;
+				this.render();
+			});
+		}
+	}
+
+	private activeTemplate(): NoteTemplate | undefined {
+		return this.plugin.templates.find((t) => t.id === this.templateId);
+	}
+
+	private setDestinationOverride(patch: DestinationOverride): void {
+		const template = this.activeTemplate();
+		if (!template) return;
+		const current: DestinationOverride = this.destinationOverride ?? {
+			insertMode: template.insertMode,
+			newFileFolder: template.newFileFolder,
+			newFileNameTemplate: template.newFileNameTemplate,
+		};
+		this.destinationOverride = {
+			insertMode: patch.insertMode ?? current.insertMode,
+			newFileFolder: patch.newFileFolder ?? current.newFileFolder,
+			newFileNameTemplate: patch.newFileNameTemplate ?? current.newFileNameTemplate,
+		};
 	}
 
 	private renderTabBar(parent: HTMLElement): void {
@@ -314,7 +413,7 @@ export class ReWriteModal extends Modal {
 	}
 
 	private async execute(source: PipelineSource): Promise<void> {
-		const template = this.plugin.settings.templates.find((t) => t.id === this.templateId);
+		const template = this.plugin.templates.find((t) => t.id === this.templateId);
 		if (!template) {
 			new Notice('Please pick a template.');
 			return;
@@ -328,9 +427,11 @@ export class ReWriteModal extends Modal {
 			await runPipeline({
 				app: this.app,
 				settings: this.plugin.settings,
+				host: this.plugin,
 				profile,
 				template,
 				source,
+				destinationOverride: this.destinationOverride ?? undefined,
 				onStage: (stage) => progress.setText(stageLabel(stage)),
 			});
 			this.plugin.settings.lastUsedTemplateId = template.id;
@@ -371,6 +472,8 @@ export class ReWriteModal extends Modal {
 
 function stageLabel(stage: PipelineStage): string {
 	switch (stage) {
+		case 'persist-audio':
+			return 'Saving audio...';
 		case 'transcribe':
 			return 'Transcribing...';
 		case 'cleanup':

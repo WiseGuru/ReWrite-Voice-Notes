@@ -45,6 +45,7 @@ const REWRITE_BRANDS = [
 
 const REWRITE_ACRONYMS = [
 	"LLM", "STT", "TTS",
+	"OS", "PBKDF2", "AES", "GCM", "KDF",
 ];
 
 const sentenceCaseOptions = {

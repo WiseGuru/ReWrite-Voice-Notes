@@ -1,13 +1,17 @@
-import { App } from 'obsidian';
-import { EnvironmentProfile, GlobalSettings, NoteTemplate } from './types';
+import { App, Notice } from 'obsidian';
+import { DestinationOverride, EnvironmentProfile, GlobalSettings, NoteTemplate, PipelineHost } from './types';
 import { createTranscriptionProvider } from './transcription';
 import { createLLMProvider } from './llm';
 import { insertOutput, InsertResult } from './insert';
+import { persistAudio } from './audio-persist';
+import { extractAdHocInstructions } from './wake-name';
+import { DEFAULT_ASSISTANT_PROMPT } from './assistant-prompt';
+import { buildKnownNounsSystemPromptSection } from './known-nouns';
 
-export type PipelineStage = 'transcribe' | 'cleanup' | 'insert';
+export type PipelineStage = 'persist-audio' | 'transcribe' | 'cleanup' | 'insert';
 
 export type PipelineSource =
-	| { kind: 'audio'; audio: Blob }
+	| { kind: 'audio'; audio: Blob; sourcePath?: string }
 	| { kind: 'paste'; text: string }
 	| { kind: 'webspeech'; transcript: string }
 	| { kind: 'text'; text: string };
@@ -15,9 +19,11 @@ export type PipelineSource =
 export interface PipelineParams {
 	app: App;
 	settings: GlobalSettings;
+	host: PipelineHost;
 	profile: EnvironmentProfile;
 	template: NoteTemplate;
 	source: PipelineSource;
+	destinationOverride?: DestinationOverride;
 	onStage?: (stage: PipelineStage) => void;
 	signal?: AbortSignal;
 }
@@ -29,6 +35,21 @@ export interface PipelineResult {
 }
 
 export async function runPipeline(params: PipelineParams): Promise<PipelineResult> {
+	let audioPath: string | undefined;
+	if (params.source.kind === 'audio') {
+		if (params.source.sourcePath) {
+			audioPath = params.source.sourcePath;
+		} else {
+			params.onStage?.('persist-audio');
+			try {
+				audioPath = await persistAudio(params.app, params.source.audio, params.settings);
+			} catch (e) {
+				console.error('ReWrite: persist audio failed', e);
+				new Notice('Could not save audio file; continuing with transcription.');
+			}
+		}
+	}
+
 	const transcript = (await collectTranscript(params)).trim();
 	if (!transcript) {
 		throw new Error('Transcript is empty; nothing to clean up.');
@@ -36,15 +57,26 @@ export async function runPipeline(params: PipelineParams): Promise<PipelineResul
 
 	params.onStage?.('cleanup');
 	const cleaned = await cleanupTranscript(params, transcript);
+	const finalContent = audioPath ? `![[${audioPath}]]\n\n${cleaned}` : cleaned;
 
 	params.onStage?.('insert');
 	const insert = await insertOutput({
 		app: params.app,
-		template: params.template,
-		content: cleaned,
+		template: applyDestinationOverride(params.template, params.destinationOverride),
+		content: finalContent,
 	});
 
-	return { transcript, cleaned, insert };
+	return { transcript, cleaned: finalContent, insert };
+}
+
+function applyDestinationOverride(template: NoteTemplate, override: DestinationOverride | undefined): NoteTemplate {
+	if (!override) return template;
+	return {
+		...template,
+		insertMode: override.insertMode ?? template.insertMode,
+		newFileFolder: override.newFileFolder ?? template.newFileFolder,
+		newFileNameTemplate: override.newFileNameTemplate ?? template.newFileNameTemplate,
+	};
 }
 
 async function collectTranscript(params: PipelineParams): Promise<string> {
@@ -64,13 +96,31 @@ async function collectTranscript(params: PipelineParams): Promise<string> {
 }
 
 async function cleanupTranscript(params: PipelineParams, transcript: string): Promise<string> {
+	let systemPrompt = params.template.prompt;
+	let workingTranscript = transcript;
+	if (params.settings.adHocInstructionsEnabled && params.settings.assistantName.trim().length > 0) {
+		const { transcript: stripped, instructions } = extractAdHocInstructions(transcript, params.settings.assistantName);
+		if (instructions.length > 0) {
+			workingTranscript = stripped;
+			const list = instructions.map((i, n) => `${n + 1}. ${i}`).join('\n');
+			const assistantPrompt = params.host.assistantPrompt ?? DEFAULT_ASSISTANT_PROMPT;
+			systemPrompt = `${systemPrompt}\n\n## Ad-hoc instructions\n${assistantPrompt}\n${list}`;
+			new Notice(`Heard ${instructions.length} ad-hoc instruction${instructions.length === 1 ? '' : 's'}.`);
+		}
+	}
+
+	const knownNounsBlock = buildKnownNounsSystemPromptSection(params.host.knownNouns);
+	if (knownNounsBlock) {
+		systemPrompt = `${systemPrompt}\n\n${knownNounsBlock}`;
+	}
+
 	const llm = createLLMProvider(params.profile.llmProvider);
 	try {
-		return await llm.complete(params.template.prompt, transcript, params.profile.llmConfig, params.signal);
+		return await llm.complete(systemPrompt, workingTranscript, params.profile.llmConfig, params.signal);
 	} catch (e) {
 		const original = e instanceof Error ? e : new Error(String(e));
 		try {
-			await navigator.clipboard.writeText(transcript);
+			await navigator.clipboard.writeText(workingTranscript);
 			throw new Error(`${original.message} (Raw transcript copied to clipboard as fallback.)`);
 		} catch (clipErr) {
 			if (clipErr instanceof Error && clipErr.message.includes('copied to clipboard')) {

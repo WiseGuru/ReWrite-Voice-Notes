@@ -1,13 +1,11 @@
-import { App, Modal, Notice, Platform, PluginSettingTab, Setting } from 'obsidian';
+import { App, Notice, Platform, PluginSettingTab, Setting } from 'obsidian';
 import type ReWritePlugin from '../main';
 import {
 	ActiveProfileKind,
 	ActiveProfileOverride,
 	EnvironmentProfile,
-	InsertMode,
 	LLMConfig,
 	LLMProviderID,
-	NoteTemplate,
 	RecordingFormatPreference,
 	TranscriptionConfig,
 	TranscriptionProviderID,
@@ -15,7 +13,13 @@ import {
 import { detectActiveProfileKind } from '../platform';
 import { createTranscriptionProvider } from '../transcription';
 import { createLLMProvider } from '../llm';
-import { WhisperStatus } from '../whisper-host';
+import { formatWhisperStatus } from '../whisper-host';
+import { populateDefaultTemplates } from '../templates-folder';
+import { populateDefaultAssistantPrompt } from '../assistant-prompt';
+import { populateDefaultKnownNouns } from '../known-nouns';
+import { changeEncryptionMode, EncryptionMode, lockSecrets } from '../secrets';
+import { hydrateSecrets } from '.';
+import { PassphraseModal } from '../ui/passphrase-modal';
 
 const TRANSCRIPTION_OPTIONS: Array<{ id: TranscriptionProviderID; label: string; desktopOnly?: boolean }> = [
 	{ id: 'openai', label: 'OpenAI Whisper' },
@@ -36,21 +40,12 @@ const LLM_OPTIONS: Array<{ id: LLMProviderID; label: string }> = [
 	{ id: 'mistral', label: 'Mistral' },
 ];
 
-const INSERT_MODE_OPTIONS: Array<{ id: InsertMode; label: string }> = [
-	{ id: 'cursor', label: 'Insert at cursor' },
-	{ id: 'newFile', label: 'Create new file' },
-	{ id: 'append', label: 'Append to active note' },
-];
-
 const RECORDING_FORMAT_OPTIONS: Array<{ id: RecordingFormatPreference; label: string }> = [
 	{ id: 'webm', label: 'webm (best on Chromium/Electron)' },
 	{ id: 'mp4', label: 'mp4 (best on mobile/Safari)' },
 ];
 
 export class ReWriteSettingTab extends PluginSettingTab {
-	private editingTemplateId: string | null = null;
-	private dragSourceIndex: number | null = null;
-
 	constructor(app: App, private readonly plugin: ReWritePlugin) {
 		super(app, plugin);
 	}
@@ -60,16 +55,162 @@ export class ReWriteSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.addClass('rewrite-settings');
 
+		this.renderEncryption(containerEl);
 		this.renderActiveProfile(containerEl);
 		this.renderProfile(containerEl, 'desktop');
 		this.renderProfile(containerEl, 'mobile');
 		this.renderLocalWhisperServer(containerEl);
 		this.renderTemplates(containerEl);
 		this.renderRecording(containerEl);
+		this.renderAdHocInstructions(containerEl);
+		this.renderKnownNouns(containerEl);
 	}
 
 	private async commit(): Promise<void> {
 		await this.plugin.saveSettings();
+	}
+
+	private apiKeyPlaceholder(): string {
+		if (this.plugin.encryptionStatus.locked) return 'Locked. Unlock to view or edit.';
+		return 'Saved securely on this device';
+	}
+
+	private applyApiKeyFieldState(input: HTMLInputElement): void {
+		if (this.plugin.encryptionStatus.locked) {
+			input.disabled = true;
+		}
+	}
+
+	private renderEncryption(parent: HTMLElement): void {
+		const status = this.plugin.encryptionStatus;
+
+		const banner = parent.createDiv({ cls: 'rewrite-encryption-banner' });
+		if (status.locked) {
+			banner.addClass('is-locked');
+			banner.createEl('strong', { text: 'API keys are locked.' });
+			banner.createEl('span', {
+				text: ' Enter your passphrase to decrypt them. Until then, recording and processing are disabled.',
+			});
+			const unlockBtn = banner.createEl('button', { text: 'Unlock', cls: 'mod-cta' });
+			unlockBtn.addEventListener('click', () => {
+				this.plugin.promptUnlock(() => this.display());
+			});
+		} else if (status.mode === 'plaintext') {
+			banner.addClass('is-warning');
+			banner.createEl('strong', { text: 'Plaintext storage.' });
+			banner.createEl('span', {
+				text: ' Your API keys are stored unencrypted on this device. Any process running as your user account can read them. Switch to a passphrase below to encrypt them.',
+			});
+		} else if (status.mode === 'safeStorage') {
+			banner.addClass('is-ok');
+			const backend = status.safeStorageBackend ? ` (${status.safeStorageBackend})` : '';
+			banner.createEl('span', { text: `Encrypted via OS keychain${backend}.` });
+		} else if (status.mode === 'passphrase') {
+			banner.addClass('is-ok');
+			banner.createEl('span', { text: 'Encrypted with passphrase. Unlocked for this session.' });
+		}
+
+		new Setting(parent).setName('API key encryption').setHeading();
+
+		parent.createEl('p', {
+			text: 'Choose how your API keys are protected on disk. Keys are stored in secrets.json.nosync in the plugin folder; this setting controls how they are encrypted.',
+			cls: 'rewrite-section-desc',
+		});
+
+		new Setting(parent)
+			.setName('Encryption mode')
+			.setDesc(this.encryptionModeDescription(status))
+			.addDropdown((dd) => {
+				if (status.safeStorageAvailable) dd.addOption('safeStorage', 'OS keychain (recommended)');
+				dd.addOption('passphrase', 'Passphrase (cross-platform)');
+				dd.addOption('plaintext', 'Plaintext (not recommended)');
+				dd.setValue(status.mode);
+				dd.onChange((v) => {
+					const next = v as EncryptionMode;
+					if (next === status.mode) return;
+					void this.handleModeChange(next);
+				});
+			});
+
+		if (status.mode === 'passphrase' && !status.locked) {
+			new Setting(parent)
+				.setName('Change passphrase')
+				.setDesc('Re-encrypts all stored keys with a new passphrase.')
+				.addButton((b) => {
+					b.setButtonText('Change').onClick(() => {
+						new PassphraseModal({
+							app: this.app,
+							title: 'Set a new passphrase',
+							description: 'Replaces the current passphrase. Stored API keys will be re-encrypted.',
+							confirmLabel: 'Save',
+							requireConfirm: true,
+							onSubmit: async (pass) => {
+								await changeEncryptionMode(this.plugin, 'passphrase', pass);
+								await this.plugin.refreshEncryptionStatus();
+								new Notice('ReWrite: passphrase updated.');
+								this.display();
+							},
+						}).open();
+					});
+				});
+
+			new Setting(parent)
+				.setName('Lock now')
+				.setDesc('Forgets the passphrase in memory. You will need to re-enter it before recording.')
+				.addButton((b) => {
+					b.setButtonText('Lock').onClick(async () => {
+						lockSecrets();
+						await hydrateSecrets(this.plugin, this.plugin.settings);
+						await this.plugin.refreshEncryptionStatus();
+						this.display();
+					});
+				});
+		}
+	}
+
+	private encryptionModeDescription(status: { mode: EncryptionMode; safeStorageAvailable: boolean; safeStorageBackend: string | null }): string {
+		const lines: string[] = [];
+		if (status.safeStorageAvailable) {
+			lines.push(`OS keychain: encrypted by your operating system (${status.safeStorageBackend ?? 'detected'}). Strongest, but only works on this machine.`);
+		} else {
+			lines.push('OS keychain: not available on this device (no working keyring detected).');
+		}
+		lines.push('Passphrase: AES-GCM with PBKDF2-derived key. You enter a passphrase once per session. Works on every platform, including mobile.');
+		lines.push('Plaintext: no encryption. Any process running as your user can read your keys.');
+		return lines.join(' ');
+	}
+
+	private async handleModeChange(next: EncryptionMode): Promise<void> {
+		try {
+			if (next === 'passphrase') {
+				new PassphraseModal({
+					app: this.app,
+					title: 'Set a passphrase',
+					description: 'A passphrase will be used to encrypt your API keys. Store it in your password manager; there is no recovery if you forget it.',
+					confirmLabel: 'Save',
+					requireConfirm: true,
+					onSubmit: async (pass) => {
+						await changeEncryptionMode(this.plugin, 'passphrase', pass);
+						await this.plugin.refreshEncryptionStatus();
+						new Notice('ReWrite: passphrase encryption enabled.');
+						this.display();
+					},
+				}).open();
+				// Modal cancel or completion handles re-render; re-render now so the dropdown
+				// doesn't appear "applied" until the user confirms.
+				this.display();
+				return;
+			}
+			await changeEncryptionMode(this.plugin, next);
+			await this.plugin.refreshEncryptionStatus();
+			const label = next === 'safeStorage' ? 'OS keychain' : 'plaintext';
+			new Notice(`ReWrite: switched to ${label} storage.`);
+			this.display();
+		} catch (e) {
+			new Notice(`ReWrite: ${e instanceof Error ? e.message : String(e)}`);
+			await this.plugin.refreshEncryptionStatus();
+			this.display();
+		}
 	}
 
 	private renderActiveProfile(parent: HTMLElement): void {
@@ -151,9 +292,11 @@ export class ReWriteSettingTab extends PluginSettingTab {
 					.setName('Transcription API key')
 					.addText((t) => {
 						t.inputEl.type = 'password';
-						t.setPlaceholder('Saved securely on this device');
+						this.applyApiKeyFieldState(t.inputEl);
+						t.setPlaceholder(this.apiKeyPlaceholder());
 						t.setValue(profile.transcriptionConfig.apiKey);
 						t.onChange(async (v) => {
+							if (this.plugin.encryptionStatus.locked) return;
 							profile.transcriptionConfig.apiKey = v;
 							await this.commit();
 						});
@@ -192,9 +335,11 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			.setName('LLM API key')
 			.addText((t) => {
 				t.inputEl.type = 'password';
-				t.setPlaceholder('Saved securely on this device');
+				this.applyApiKeyFieldState(t.inputEl);
+				t.setPlaceholder(this.apiKeyPlaceholder());
 				t.setValue(profile.llmConfig.apiKey);
 				t.onChange(async (v) => {
+					if (this.plugin.encryptionStatus.locked) return;
 					profile.llmConfig.apiKey = v;
 					await this.commit();
 				});
@@ -406,9 +551,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 				});
 			});
 
-		const advanced = parent.createEl('details', { cls: 'rewrite-advanced' });
-		advanced.createEl('summary', { text: 'Advanced' });
-		new Setting(advanced)
+		new Setting(parent)
 			.setName('Extra args')
 			.setDesc('Space-separated CLI args appended after -m, --port.')
 			.addText((t) => {
@@ -420,16 +563,21 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			});
 
 		const host = this.plugin.whisperHost;
-		const status = host.status();
-		const baseUrl = host.baseUrl();
+		const snap = host.snapshot();
 
-		const statusSetting = new Setting(parent).setName('Status').setDesc(formatWhisperStatus(status, baseUrl));
+		const statusSetting = new Setting(parent).setName('Status').setDesc(formatWhisperStatus(snap));
 		statusSetting.addButton((b) => {
-			if (status === 'running' || status === 'starting') {
+			if (snap.status === 'running' || snap.status === 'starting') {
 				b.setButtonText('Stop').onClick(async () => {
-					await host.stop();
+					try {
+						await host.stop();
+					} catch (e) {
+						new Notice(e instanceof Error ? e.message : String(e));
+					}
 					this.display();
 				});
+			} else if (snap.status === 'external') {
+				b.setButtonText('External').setDisabled(true).setTooltip('Not started by ReWrite. Stop the process from your task manager.');
 			} else {
 				b.setButtonText('Start').setCta().onClick(async () => {
 					try {
@@ -440,6 +588,16 @@ export class ReWriteSettingTab extends PluginSettingTab {
 					this.display();
 				});
 			}
+		});
+		statusSetting.addExtraButton((b) => {
+			b.setIcon('refresh-cw').setTooltip('Probe the configured port for an existing server').onClick(async () => {
+				try {
+					await host.probe(cfg);
+				} catch (e) {
+					new Notice(e instanceof Error ? e.message : String(e));
+				}
+				this.display();
+			});
 		});
 
 		const log = host.getLog();
@@ -454,192 +612,60 @@ export class ReWriteSettingTab extends PluginSettingTab {
 	private renderTemplates(parent: HTMLElement): void {
 		new Setting(parent).setName('Templates').setHeading();
 		parent.createEl('p', {
-			text: 'Drag the handle to reorder. Templates appear in the modal dropdown in this order.',
+			text: 'Templates live as Markdown files in a vault folder. The file body is the LLM prompt; frontmatter holds the metadata. Files are sorted by filename, so prefix with a number to control order.',
 			cls: 'rewrite-section-desc',
 		});
 
-		const templates = this.plugin.settings.templates;
-		const list = parent.createDiv({ cls: 'rewrite-templates-list' });
+		const s = this.plugin.settings;
 
-		if (templates.length === 0) {
-			list.createEl('p', {
-				text: 'No templates configured. Add one to get started.',
-				cls: 'rewrite-templates-empty',
-			});
-		} else {
-			for (let i = 0; i < templates.length; i++) {
-				const template = templates[i];
-				if (!template) continue;
-				this.renderTemplateItem(list, template, i);
-			}
-		}
-
-		const actions = parent.createDiv({ cls: 'rewrite-templates-actions' });
-		const addBtn = actions.createEl('button', { text: 'Add template', cls: 'mod-cta' });
-		addBtn.addEventListener('click', () => {
-			void this.addTemplate();
-		});
-	}
-
-	private renderTemplateItem(parent: HTMLElement, template: NoteTemplate, index: number): void {
-		const item = parent.createDiv({ cls: 'rewrite-template-item' });
-		item.draggable = true;
-		item.dataset.index = String(index);
-
-		item.addEventListener('dragstart', (ev) => {
-			this.dragSourceIndex = index;
-			item.addClass('is-dragging');
-			if (ev.dataTransfer) {
-				ev.dataTransfer.effectAllowed = 'move';
-				ev.dataTransfer.setData('text/plain', String(index));
-			}
-		});
-		item.addEventListener('dragend', () => {
-			item.removeClass('is-dragging');
-			this.dragSourceIndex = null;
-		});
-		item.addEventListener('dragover', (ev) => {
-			ev.preventDefault();
-			if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
-			item.addClass('is-drop-target');
-		});
-		item.addEventListener('dragleave', () => {
-			item.removeClass('is-drop-target');
-		});
-		item.addEventListener('drop', (ev) => {
-			ev.preventDefault();
-			item.removeClass('is-drop-target');
-			const from = this.dragSourceIndex;
-			this.dragSourceIndex = null;
-			void this.reorderTemplate(from, index);
-		});
-
-		const header = item.createDiv({ cls: 'rewrite-template-header' });
-		const handle = header.createSpan({ cls: 'rewrite-drag-handle', text: '⋮⋮' });
-		handle.setAttr('aria-label', 'Drag to reorder');
-		header.createSpan({
-			cls: 'rewrite-template-name',
-			text: template.name || '(unnamed)',
-		});
-
-		const isEditing = this.editingTemplateId === template.id;
-		const actions = header.createDiv({ cls: 'rewrite-template-actions' });
-		const editBtn = actions.createEl('button', { text: isEditing ? 'Close' : 'Edit' });
-		editBtn.addEventListener('click', () => {
-			this.editingTemplateId = isEditing ? null : template.id;
-			this.display();
-		});
-		const deleteBtn = actions.createEl('button', { text: 'Delete' });
-		deleteBtn.addEventListener('click', () => {
-			this.deleteTemplate(template);
-		});
-
-		if (isEditing) {
-			this.renderTemplateEditor(item, template);
-		}
-	}
-
-	private renderTemplateEditor(parent: HTMLElement, template: NoteTemplate): void {
-		const editor = parent.createDiv({ cls: 'rewrite-template-editor' });
-
-		new Setting(editor)
-			.setName('Name')
+		new Setting(parent)
+			.setName('Templates folder')
+			.setDesc('Vault-relative path. Created by the populate button if it does not exist.')
 			.addText((t) => {
-				t.setValue(template.name);
+				t.setValue(s.templatesFolderPath);
 				t.onChange(async (v) => {
-					template.name = v;
+					s.templatesFolderPath = v;
 					await this.commit();
+					await this.plugin.refreshTemplates();
 				});
 			});
 
-		new Setting(editor)
-			.setName('Prompt')
-			.setDesc('System prompt sent to the LLM. The raw transcript is passed as the user message.')
-			.addTextArea((t) => {
-				t.setValue(template.prompt);
-				t.onChange(async (v) => {
-					template.prompt = v;
-					await this.commit();
-				});
-				t.inputEl.rows = 6;
-				t.inputEl.addClass('rewrite-prompt-textarea');
-			});
-
-		new Setting(editor)
-			.setName('Insert mode')
-			.addDropdown((dd) => {
-				for (const opt of INSERT_MODE_OPTIONS) dd.addOption(opt.id, opt.label);
-				dd.setValue(template.insertMode);
-				dd.onChange(async (v) => {
-					template.insertMode = v as InsertMode;
-					await this.commit();
-					this.display();
+		new Setting(parent)
+			.setName('Populate with default templates')
+			.setDesc('Writes the five built-in templates into the folder above. Skips any whose ID already exists, so re-running tops up after a deletion.')
+			.addButton((b) => {
+				b.setButtonText('Populate').setCta().onClick(async () => {
+					try {
+						const result = await populateDefaultTemplates(this.app, s.templatesFolderPath);
+						await this.plugin.refreshTemplates();
+						new Notice(`ReWrite: populated ${result.folder}. Created ${result.created}, skipped ${result.skipped}.`);
+						this.display();
+					} catch (e) {
+						new Notice(`ReWrite: populate failed. ${e instanceof Error ? e.message : String(e)}`);
+					}
 				});
 			});
 
-		if (template.insertMode === 'newFile') {
-			new Setting(editor)
-				.setName('New file folder')
-				.setDesc('Vault-relative folder. Leave blank for vault root.')
-				.addText((t) => {
-					t.setValue(template.newFileFolder);
-					t.onChange(async (v) => {
-						template.newFileFolder = v;
-						await this.commit();
-					});
-				});
+		const loaded = this.plugin.templates;
+		const listDesc = loaded.length === 0
+			? 'No templates loaded. Set a folder path and click Populate, or add your own Markdown files there.'
+			: `Loaded ${loaded.length} template${loaded.length === 1 ? '' : 's'}: ${loaded.map((t) => t.name).join(', ')}.`;
+		parent.createEl('p', { text: listDesc, cls: 'rewrite-section-desc' });
 
-			new Setting(editor)
-				.setName('New file name template')
-				.setDesc('Supports {{date}} (YYYY-MM-DD) and {{time}} (HHmmss).')
-				.addText((t) => {
-					t.setValue(template.newFileNameTemplate);
-					t.setPlaceholder('ReWrite {{date}} {{time}}');
-					t.onChange(async (v) => {
-						template.newFileNameTemplate = v;
+		if (loaded.length > 0) {
+			new Setting(parent)
+				.setName('Default template')
+				.setDesc('Used by quick record and pre-selected in the modal.')
+				.addDropdown((dd) => {
+					dd.addOption('', '(first loaded)');
+					for (const tpl of loaded) dd.addOption(tpl.id, tpl.name);
+					dd.setValue(loaded.some((t) => t.id === s.defaultTemplateId) ? s.defaultTemplateId : '');
+					dd.onChange(async (v) => {
+						s.defaultTemplateId = v;
 						await this.commit();
 					});
 				});
 		}
-	}
-
-	private async addTemplate(): Promise<void> {
-		const newTemplate: NoteTemplate = {
-			id: generateTemplateId(),
-			name: 'Untitled template',
-			prompt: 'Clean up the transcript while preserving the original meaning.',
-			insertMode: 'cursor',
-			newFileFolder: '',
-			newFileNameTemplate: 'ReWrite {{date}} {{time}}',
-		};
-		this.plugin.settings.templates.push(newTemplate);
-		this.editingTemplateId = newTemplate.id;
-		await this.commit();
-		this.display();
-	}
-
-	private async reorderTemplate(from: number | null, to: number): Promise<void> {
-		if (from === null || from === to) return;
-		const templates = this.plugin.settings.templates;
-		if (from < 0 || from >= templates.length || to < 0 || to >= templates.length) return;
-		const [moved] = templates.splice(from, 1);
-		if (!moved) return;
-		templates.splice(to, 0, moved);
-		await this.commit();
-		this.display();
-	}
-
-	private deleteTemplate(template: NoteTemplate): void {
-		new ConfirmModal(this.app, `Delete template "${template.name}"?`, 'Delete', async () => {
-			const s = this.plugin.settings;
-			s.templates = s.templates.filter((t) => t.id !== template.id);
-			if (s.defaultTemplateId === template.id) s.defaultTemplateId = '';
-			if (s.lastUsedTemplateId === template.id) s.lastUsedTemplateId = '';
-			if (this.editingTemplateId === template.id) this.editingTemplateId = null;
-			await this.commit();
-			this.display();
-			new Notice('Template deleted.');
-		}).open();
 	}
 
 	private renderRecording(parent: HTMLElement): void {
@@ -655,50 +681,158 @@ export class ReWriteSettingTab extends PluginSettingTab {
 					await this.commit();
 				});
 			});
-	}
-}
 
-class ConfirmModal extends Modal {
-	constructor(
-		app: App,
-		private readonly message: string,
-		private readonly confirmLabel: string,
-		private readonly onConfirm: () => void | Promise<void>,
-	) {
-		super(app);
+		new Setting(parent)
+			.setName('Attachments folder')
+			.setDesc('Vault-relative folder for saved recordings. Leave empty to use the vault\'s attachments setting. Each recording is embedded at the top of the cleaned output.')
+			.addText((t) => {
+				t.setValue(this.plugin.settings.attachmentsFolderPath);
+				t.setPlaceholder('Attachments');
+				t.onChange(async (v) => {
+					this.plugin.settings.attachmentsFolderPath = v;
+					await this.commit();
+				});
+			});
 	}
 
-	onOpen(): void {
-		this.contentEl.createEl('p', { text: this.message });
-		const actions = this.contentEl.createDiv({ cls: 'rewrite-modal-actions' });
-		const cancel = actions.createEl('button', { text: 'Cancel' });
-		cancel.addEventListener('click', () => this.close());
-		const confirm = actions.createEl('button', { text: this.confirmLabel, cls: 'mod-warning' });
-		confirm.addEventListener('click', () => {
-			this.close();
-			void this.onConfirm();
+	private renderAdHocInstructions(parent: HTMLElement): void {
+		new Setting(parent).setName('Ad-hoc instructions').setHeading();
+		parent.createEl('p', {
+			text: 'Address the assistant by name mid-dictation, then a comma, then a directive. Matches are stripped from the transcript and appended to the cleanup prompt as numbered instructions. Off by default. Pick an uncommon word; common everyday words will misfire.',
+			cls: 'rewrite-section-desc',
 		});
+
+		new Setting(parent)
+			.setName('Enabled')
+			.setDesc('Scan transcripts (all sources) for the assistant name and extract impromptu instructions.')
+			.addToggle((t) => {
+				t.setValue(this.plugin.settings.adHocInstructionsEnabled);
+				t.onChange(async (v) => {
+					this.plugin.settings.adHocInstructionsEnabled = v;
+					await this.commit();
+					this.display();
+				});
+			});
+
+		if (this.plugin.settings.adHocInstructionsEnabled) {
+			new Setting(parent)
+				.setName('Assistant name')
+				.setDesc('The wake word the assistant listens for. Speech recognition may mangle uncommon names; expect occasional misses.')
+				.addText((t) => {
+					t.setValue(this.plugin.settings.assistantName);
+					t.setPlaceholder('Scrivener');
+					t.onChange(async (v) => {
+						this.plugin.settings.assistantName = v;
+						await this.commit();
+					});
+				});
+
+			new Setting(parent)
+				.setName('Assistant prompt file')
+				.setDesc('Vault-relative path to a Markdown file whose body is inserted above the numbered list of interjections in the system prompt. Edit it like a normal note to tell the LLM how to weight and apply ad-hoc directives.')
+				.addText((t) => {
+					t.setValue(this.plugin.settings.assistantPromptPath);
+					t.setPlaceholder('ReWrite/AssistantPrompt.md');
+					t.onChange(async (v) => {
+						this.plugin.settings.assistantPromptPath = v;
+						await this.commit();
+						await this.plugin.refreshAssistantPrompt();
+					});
+				});
+
+			new Setting(parent)
+				.setName('Populate default assistant prompt')
+				.setDesc('Writes the built-in default into the file above. Skipped if the file already exists.')
+				.addButton((b) => {
+					b.setButtonText('Populate').setCta().onClick(async () => {
+						try {
+							const created = await populateDefaultAssistantPrompt(this.app, this.plugin.settings.assistantPromptPath);
+							await this.plugin.refreshAssistantPrompt();
+							new Notice(created
+								? `ReWrite: created ${this.plugin.settings.assistantPromptPath}.`
+								: `ReWrite: ${this.plugin.settings.assistantPromptPath} already exists.`);
+							this.display();
+						} catch (e) {
+							new Notice(`ReWrite: ${e instanceof Error ? e.message : String(e)}`);
+						}
+					});
+				})
+				.addExtraButton((b) => {
+					b.setIcon('external-link').setTooltip('Open file in a new pane').onClick(() => {
+						const path = this.plugin.settings.assistantPromptPath.trim();
+						if (!path) {
+							new Notice('Set an assistant prompt path first.');
+							return;
+						}
+						void this.app.workspace.openLinkText(path, '', true);
+					});
+				});
+
+			const loaded = this.plugin.assistantPrompt;
+			parent.createEl('p', {
+				text: loaded
+					? `Loaded ${loaded.length.toLocaleString()} characters from ${this.plugin.settings.assistantPromptPath}.`
+					: 'No assistant prompt loaded. The built-in default is used until you populate or write the file.',
+				cls: 'rewrite-section-desc',
+			});
+		}
 	}
 
-	onClose(): void {
-		this.contentEl.empty();
-	}
-}
+	private renderKnownNouns(parent: HTMLElement): void {
+		new Setting(parent).setName('Known nouns').setHeading();
+		parent.createEl('p', {
+			text: 'A vault file listing proper nouns the LLM should preserve verbatim, with optional misheard alternates. The list is appended to every cleanup system prompt, so keep it focused on nouns the LLM actually mangles; an unbounded list inflates token cost on every recording.',
+			cls: 'rewrite-section-desc',
+		});
 
-function generateTemplateId(): string {
-	return `tpl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
+		new Setting(parent)
+			.setName('Known nouns file')
+			.setDesc('Vault-relative path. Frontmatter is for human-readable guidance only; the body is one noun per line, with an optional ": alt1, alt2" suffix for misheard variants.')
+			.addText((t) => {
+				t.setValue(this.plugin.settings.knownNounsPath);
+				t.setPlaceholder('ReWrite/KnownNouns.md');
+				t.onChange(async (v) => {
+					this.plugin.settings.knownNounsPath = v;
+					await this.commit();
+					await this.plugin.refreshKnownNouns();
+				});
+			});
 
-function formatWhisperStatus(status: WhisperStatus, baseUrl: string | null): string {
-	switch (status) {
-		case 'stopped':
-			return 'Stopped.';
-		case 'starting':
-			return 'Starting...';
-		case 'running':
-			return baseUrl ? `Running on ${baseUrl}.` : 'Running.';
-		case 'crashed':
-			return 'Crashed. See log for details.';
+		new Setting(parent)
+			.setName('Populate default known nouns')
+			.setDesc('Writes a starter file with guidance frontmatter and example nouns. Skipped if the file already exists.')
+			.addButton((b) => {
+				b.setButtonText('Populate').setCta().onClick(async () => {
+					try {
+						const created = await populateDefaultKnownNouns(this.app, this.plugin.settings.knownNounsPath);
+						await this.plugin.refreshKnownNouns();
+						new Notice(created
+							? `ReWrite: created ${this.plugin.settings.knownNounsPath}.`
+							: `ReWrite: ${this.plugin.settings.knownNounsPath} already exists.`);
+						this.display();
+					} catch (e) {
+						new Notice(`ReWrite: ${e instanceof Error ? e.message : String(e)}`);
+					}
+				});
+			})
+			.addExtraButton((b) => {
+				b.setIcon('external-link').setTooltip('Open file in a new pane').onClick(() => {
+					const path = this.plugin.settings.knownNounsPath.trim();
+					if (!path) {
+						new Notice('Set a known nouns path first.');
+						return;
+					}
+					void this.app.workspace.openLinkText(path, '', true);
+				});
+			});
+
+		const loaded = this.plugin.knownNouns;
+		parent.createEl('p', {
+			text: loaded.length === 0
+				? 'No known nouns loaded. The "Known nouns" section is omitted from the system prompt.'
+				: `Loaded ${loaded.length} noun${loaded.length === 1 ? '' : 's'}: ${loaded.map((n) => n.canonical).join(', ')}.`,
+			cls: 'rewrite-section-desc',
+		});
 	}
 }
 

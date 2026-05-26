@@ -15,13 +15,16 @@ export class QuickRecordController {
 	private floater: QuickRecordFloater | null = null;
 	private settled = false;
 	private startedAt = 0;
+	private template: NoteTemplate;
 
 	constructor(
 		private readonly plugin: ReWritePlugin,
-		private readonly template: NoteTemplate,
+		template: NoteTemplate,
 		private readonly isWebSpeech: boolean,
 		private readonly onDispose: () => void,
-	) {}
+	) {
+		this.template = template;
+	}
 
 	async begin(): Promise<void> {
 		const { profile } = resolveActiveProfile(this.plugin.settings);
@@ -34,12 +37,19 @@ export class QuickRecordController {
 			await this.recorder.start(this.plugin.settings.recordingFormat);
 		}
 		this.startedAt = Date.now();
-		this.floater = new QuickRecordFloater(
-			() => {
+		this.floater = new QuickRecordFloater({
+			onStop: () => {
 				void this.finish();
 			},
-			() => this.cancel(),
-		);
+			onCancel: () => this.cancel(),
+			getTemplates: () => this.plugin.templates,
+			getActiveTemplateId: () => this.template.id,
+			onPickTemplate: (t) => {
+				this.template = t;
+				this.floater?.setTemplateName(t.name);
+			},
+			initialTemplateName: this.template.name,
+		});
 		this.timerHandle = window.setInterval(() => {
 			const ms = this.isWebSpeech
 				? Date.now() - this.startedAt
@@ -72,6 +82,7 @@ export class QuickRecordController {
 			await runPipeline({
 				app: this.plugin.app,
 				settings: this.plugin.settings,
+				host: this.plugin,
 				profile,
 				template: this.template,
 				source,
@@ -120,6 +131,12 @@ export async function startQuickRecord(
 	const settings = plugin.settings;
 	const { profile } = resolveActiveProfile(settings);
 
+	if (plugin.encryptionStatus.locked) {
+		new Notice('ReWrite: API keys are locked. Unlock to record.');
+		plugin.promptUnlock();
+		return null;
+	}
+
 	if (!isProfileConfigured(profile)) {
 		new Notice('ReWrite: profile is not configured. Finish setup to use quick record.');
 		new ReWriteModal(plugin.app, plugin).open();
@@ -159,30 +176,60 @@ export async function startQuickRecord(
 
 function pickQuickRecordTemplate(plugin: ReWritePlugin): NoteTemplate | undefined {
 	const s = plugin.settings;
+	const templates = plugin.templates;
 	return (
-		s.templates.find((t) => t.id === s.defaultTemplateId)
-		?? s.templates.find((t) => t.id === s.lastUsedTemplateId)
-		?? s.templates[0]
+		templates.find((t) => t.id === s.defaultTemplateId)
+		?? templates.find((t) => t.id === s.lastUsedTemplateId)
+		?? templates[0]
 	);
+}
+
+interface QuickRecordFloaterOptions {
+	onStop: () => void;
+	onCancel: () => void;
+	getTemplates: () => NoteTemplate[];
+	getActiveTemplateId: () => string;
+	onPickTemplate: (t: NoteTemplate) => void;
+	initialTemplateName: string;
 }
 
 class QuickRecordFloater {
 	private readonly el: HTMLElement;
 	private readonly timerEl: HTMLElement;
+	private readonly templateBtn: HTMLButtonElement;
+	private readonly templateLabel: HTMLElement;
+	private popover: HTMLElement | null = null;
+	private outsideClickHandler: ((e: MouseEvent) => void) | null = null;
+	private keyHandler: ((e: KeyboardEvent) => void) | null = null;
 	private busy = false;
 
-	constructor(onStop: () => void, onCancel: () => void) {
+	constructor(private readonly options: QuickRecordFloaterOptions) {
 		this.el = document.body.createDiv({ cls: 'rewrite-quick-floater' });
 		this.el.createSpan({ cls: 'rewrite-quick-dot' });
 		this.el.createSpan({ cls: 'rewrite-quick-label', text: 'Recording' });
 		this.timerEl = this.el.createSpan({ cls: 'rewrite-quick-timer', text: '0:00' });
+
+		this.templateBtn = this.el.createEl('button', {
+			cls: 'rewrite-quick-template',
+		});
+		this.templateLabel = this.templateBtn.createSpan({
+			cls: 'rewrite-quick-template-label',
+			text: options.initialTemplateName,
+		});
+		this.templateBtn.title = 'Change template';
+		this.templateBtn.addEventListener('click', (e) => {
+			if (this.busy) return;
+			e.stopPropagation();
+			this.togglePopover();
+		});
+
 		const stopBtn = this.el.createEl('button', {
 			text: 'Stop',
 			cls: 'mod-cta rewrite-quick-stop',
 		});
 		stopBtn.addEventListener('click', () => {
 			if (this.busy) return;
-			onStop();
+			options.onStop();
 		});
 		const cancelBtn = this.el.createEl('button', {
 			text: 'Cancel',
@@ -190,7 +237,7 @@ class QuickRecordFloater {
 		});
 		cancelBtn.addEventListener('click', () => {
 			if (this.busy) return;
-			onCancel();
+			options.onCancel();
 		});
 	}
 
@@ -202,15 +249,77 @@ class QuickRecordFloater {
 		this.busy = true;
 		this.el.addClass('is-busy');
 		this.timerEl.setText(label);
+		this.templateBtn.disabled = true;
+		this.closePopover();
+	}
+
+	setTemplateName(name: string): void {
+		this.templateLabel.setText(name);
 	}
 
 	dispose(): void {
+		this.closePopover();
 		this.el.remove();
+	}
+
+	private togglePopover(): void {
+		if (this.popover) {
+			this.closePopover();
+			return;
+		}
+		this.openPopover();
+	}
+
+	private openPopover(): void {
+		const templates = this.options.getTemplates();
+		if (templates.length === 0) return;
+		const activeId = this.options.getActiveTemplateId();
+		const popover = this.el.createDiv({ cls: 'rewrite-quick-popover' });
+		for (const t of templates) {
+			const item = popover.createEl('button', {
+				cls: 'rewrite-quick-popover-item',
+				text: t.name,
+			});
+			if (t.id === activeId) item.addClass('is-active');
+			item.addEventListener('click', (e) => {
+				e.stopPropagation();
+				this.options.onPickTemplate(t);
+				this.closePopover();
+			});
+		}
+		this.popover = popover;
+
+		this.outsideClickHandler = (e: MouseEvent) => {
+			if (!this.popover) return;
+			const target = e.target as Node | null;
+			if (target && (this.popover.contains(target) || this.templateBtn.contains(target))) return;
+			this.closePopover();
+		};
+		this.keyHandler = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') this.closePopover();
+		};
+		document.addEventListener('click', this.outsideClickHandler, true);
+		document.addEventListener('keydown', this.keyHandler, true);
+	}
+
+	private closePopover(): void {
+		if (this.outsideClickHandler) {
+			document.removeEventListener('click', this.outsideClickHandler, true);
+			this.outsideClickHandler = null;
+		}
+		if (this.keyHandler) {
+			document.removeEventListener('keydown', this.keyHandler, true);
+			this.keyHandler = null;
+		}
+		this.popover?.remove();
+		this.popover = null;
 	}
 }
 
 function stageLabel(stage: PipelineStage): string {
 	switch (stage) {
+		case 'persist-audio':
+			return 'Saving audio...';
 		case 'transcribe':
 			return 'Transcribing...';
 		case 'cleanup':

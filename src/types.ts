@@ -40,6 +40,22 @@ export interface NoteTemplate {
 	newFileNameTemplate: string;
 }
 
+export interface DestinationOverride {
+	insertMode?: InsertMode;
+	newFileFolder?: string;
+	newFileNameTemplate?: string;
+}
+
+export interface KnownNoun {
+	canonical: string;
+	alternates: string[];
+}
+
+export interface PipelineHost {
+	assistantPrompt: string | null;
+	knownNouns: KnownNoun[];
+}
+
 export interface EnvironmentProfile {
 	name: string;
 	transcriptionProvider: TranscriptionProviderID;
@@ -76,7 +92,12 @@ export interface GlobalSettings {
 	defaultTemplateId: string;
 	lastUsedTemplateId: string;
 	recordingFormat: RecordingFormatPreference;
-	templates: NoteTemplate[];
+	templatesFolderPath: string;
+	attachmentsFolderPath: string;
+	adHocInstructionsEnabled: boolean;
+	assistantName: string;
+	assistantPromptPath: string;
+	knownNounsPath: string;
 	modelCache: ModelCache;
 	localWhisper: LocalWhisperSettings;
 }
