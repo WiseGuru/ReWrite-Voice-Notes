@@ -362,8 +362,12 @@
 	font-size: var(--font-ui-small);
 }
 
-.rewrite-passphrase-modal .rewrite-passphrase-tips strong {
-	display: block;
+.rewrite-passphrase-modal .rewrite-passphrase-tips summary {
+	font-weight: var(--font-bold, 700);
+	cursor: pointer;
+}
+
+.rewrite-passphrase-modal .rewrite-passphrase-tips[open] summary {
 	margin-bottom: 6px;
 }
 
@@ -407,5 +411,49 @@
 .rewrite-rename-modal .rewrite-rename-input {
 	width: 100%;
 	font-family: var(--font-monospace);
+}
+
+/*
+ * Mobile soft-keyboard avoidance.
+ *
+ * Obsidian mobile (Capacitor) overlays the soft keyboard on top of the WebView
+ * without resizing the layout or visual viewport, so a centered popup is
+ * covered by the keyboard with no JS signal to react to. We pin our own popups
+ * to the top of the screen instead: the keyboard opens from the bottom, so a
+ * top-anchored modal (and its near-top input fields) stays visible above it.
+ * Scoped to our modal classes so core Obsidian modals are untouched.
+ * `align-self: flex-start` moves just our modal to the top of the flex
+ * container that centers modals; the auto bottom margin is a fallback for
+ * non-default flex configurations.
+ */
+.is-mobile .rewrite-modal,
+.is-mobile .rewrite-rename-modal {
+	align-self: flex-start;
+	margin-top: 8px;
+	margin-bottom: auto;
+	max-height: calc(100% - 16px);
+}
+
+/*
+ * Reclaim the empty band Obsidian leaves above the title on mobile and tighten
+ * the title's own top margin, so the whole popup shifts up and more of it
+ * clears the keyboard.
+ */
+.is-mobile .rewrite-modal .modal-content,
+.is-mobile .rewrite-rename-modal .modal-content {
+	padding-top: 8px;
+}
+
+.is-mobile .rewrite-modal h2 {
+	margin-top: 0;
+}
+
+/*
+ * The Paste textarea renders at 4 rows on mobile (set in modal.ts); drop the
+ * desktop 160px min-height floor so that takes effect and the submit button
+ * below it stays above the keyboard.
+ */
+.is-mobile .rewrite-modal .rewrite-paste {
+	min-height: 80px;
 }
 

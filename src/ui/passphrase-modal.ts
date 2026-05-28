@@ -1,5 +1,4 @@
-import { App, Modal, Notice, Setting } from 'obsidian';
-import { installMobileKeyboardScrollFix } from '../platform';
+import { App, Modal, Notice, Platform, Setting } from 'obsidian';
 
 export interface PassphrasePromptParams {
 	app: App;
@@ -17,6 +16,7 @@ export class PassphraseModal extends Modal {
 	private confirm = '';
 	private busy = false;
 	private errorEl: HTMLElement | null = null;
+	private tipsEl: HTMLDetailsElement | null = null;
 
 	constructor(private readonly params: PassphrasePromptParams) {
 		super(params.app);
@@ -26,7 +26,6 @@ export class PassphraseModal extends Modal {
 		this.modalEl.addClass('rewrite-modal');
 		this.modalEl.addClass('rewrite-passphrase-modal');
 		const { contentEl } = this;
-		installMobileKeyboardScrollFix(contentEl);
 		contentEl.createEl('h2', { text: this.params.title });
 
 		if (this.params.description) {
@@ -42,8 +41,11 @@ export class PassphraseModal extends Modal {
 			.addText((t) => {
 				t.inputEl.type = 'password';
 				t.inputEl.addClass('rewrite-passphrase-input');
-				t.inputEl.autofocus = true;
+				// On mobile, programmatic autofocus would fire `focus` (collapsing
+				// the tips) before the user has read them; let the user's tap do it.
+				t.inputEl.autofocus = !Platform.isMobile;
 				t.onChange((v) => { this.passphrase = v; });
+				t.inputEl.addEventListener('focus', () => this.collapseTipsOnMobile());
 				t.inputEl.addEventListener('keydown', (e) => this.onKeydown(e));
 			});
 
@@ -54,6 +56,7 @@ export class PassphraseModal extends Modal {
 					t.inputEl.type = 'password';
 					t.inputEl.addClass('rewrite-passphrase-input');
 					t.onChange((v) => { this.confirm = v; });
+					t.inputEl.addEventListener('focus', () => this.collapseTipsOnMobile());
 					t.inputEl.addEventListener('keydown', (e) => this.onKeydown(e));
 				});
 
@@ -79,8 +82,14 @@ export class PassphraseModal extends Modal {
 	}
 
 	private renderPassphraseTips(parent: HTMLElement): void {
-		const tips = parent.createDiv({ cls: 'rewrite-passphrase-tips' });
-		tips.createEl('strong', { text: 'Picking a strong passphrase' });
+		// Expanded by default everywhere so the guidance is seen before typing
+		// (opt-out, not opt-in). On mobile it auto-collapses when a passphrase
+		// field is focused (see collapseTipsOnMobile), so it doesn't push the
+		// fields into the soft keyboard once the user starts entering a value.
+		const tips = parent.createEl('details', { cls: 'rewrite-passphrase-tips' });
+		tips.setAttr('open', '');
+		this.tipsEl = tips;
+		tips.createEl('summary', { text: 'Picking a strong passphrase' });
 
 		const list = tips.createEl('ul');
 
@@ -104,6 +113,10 @@ export class PassphraseModal extends Modal {
 		li3.createSpan({ text: ' before using them. See ' });
 		appendExternalLink(li3, 'hivesystems.com/password', 'https://www.hivesystems.com/password');
 		li3.createSpan({ text: ' for brute-force time estimates by length and character class.' });
+	}
+
+	private collapseTipsOnMobile(): void {
+		if (Platform.isMobile) this.tipsEl?.removeAttribute('open');
 	}
 
 	private onKeydown(e: KeyboardEvent): void {

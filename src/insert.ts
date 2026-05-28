@@ -1,5 +1,4 @@
 import { App, MarkdownView, Modal, moment, normalizePath, Notice, Setting, TFile } from 'obsidian';
-import { installMobileKeyboardScrollFix } from './platform';
 import { NewFileCollisionMode, NoteTemplate } from './types';
 
 export type InsertStage = 'cursor' | 'newFile' | 'append';
@@ -118,7 +117,6 @@ class RenamePromptModal extends Modal {
 	onOpen(): void {
 		const { contentEl } = this;
 		this.modalEl.addClass('rewrite-rename-modal');
-		installMobileKeyboardScrollFix(contentEl);
 		contentEl.createEl('h2', { text: 'File already exists' });
 		contentEl.createEl('p', { text: `A file already exists at ${this.conflictPath}. Choose a new path.` });
 

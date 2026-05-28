@@ -1,7 +1,7 @@
-import { App, Modal, Notice } from 'obsidian';
+import { App, Modal, Notice, Platform } from 'obsidian';
 import type ReWritePlugin from '../main';
 import { runPipeline, PipelineSource, PipelineStage } from '../pipeline';
-import { installMobileKeyboardScrollFix, isMediaRecorderAvailable, resolveActiveProfile } from '../platform';
+import { isMediaRecorderAvailable, resolveActiveProfile } from '../platform';
 import { Recorder } from '../recorder';
 import { DestinationOverride, EnvironmentProfile, InsertMode, NoteTemplate } from '../types';
 import { isProfileConfigured, isProfileConfiguredForText, renderSetupCard } from './setup-card';
@@ -28,7 +28,6 @@ export class ReWriteModal extends Modal {
 
 	onOpen(): void {
 		this.modalEl.addClass('rewrite-modal');
-		installMobileKeyboardScrollFix(this.contentEl);
 		this.render();
 	}
 
@@ -334,7 +333,8 @@ export class ReWriteModal extends Modal {
 
 	private renderPasteTab(parent: HTMLElement): void {
 		const textarea = parent.createEl('textarea', { cls: 'rewrite-paste' });
-		textarea.rows = 10;
+		// Fewer rows on mobile so the submit button stays above the soft keyboard.
+		textarea.rows = Platform.isMobile ? 4 : 10;
 		const button = parent.createEl('button', { text: 'Clean up', cls: 'mod-cta' });
 		button.addEventListener('click', () => {
 			const text = textarea.value.trim();

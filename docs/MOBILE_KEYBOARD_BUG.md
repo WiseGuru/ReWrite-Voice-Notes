@@ -1,9 +1,17 @@
 # Mobile keyboard covers plugin text boxes (Android) — investigation log
 
-Status: **UNRESOLVED.** Three substantively different code approaches have produced no
-observable change on the user's Android device. This document records everything tried so
-the problem can be tackled methodically (instrument first, then fix) rather than by more
-blind guessing.
+Status: **CSS top-anchor confirmed working; residual tall-popup cases fixed in Attempt 4b, awaiting
+device confirmation.** After three JS approaches (all keyed off `visualViewport`) produced no
+observable change, the JS helper was removed entirely and replaced with a CSS-only top-anchor (see
+Attempt 4 below). The reporter confirmed the top-anchor fixed the simple popups; two tall-popup cases
+(change-passphrase fields, Paste submit button) were then addressed in Attempt 4b. Corroborating evidence drove the
+pivot: (a) the reporter confirmed another plugin with the same popup-style text boxes hits the
+*identical* bug, establishing this as Obsidian-mobile platform behavior rather than a defect in our
+code; (b) the official Obsidian docs expose no plugin-facing keyboard/viewport/inset API and confirm
+Obsidian mobile is Capacitor-based (`Platform.isMobileApp` = "running the capacitor-js mobile app"),
+which is consistent with Hypothesis A (keyboard overlays without resizing the viewport, so no JS
+signal fires). The CSS approach is signal-independent: it does not depend on `visualViewport` or any
+Capacitor event. This document records everything tried so the history is not lost.
 
 ## Problem statement
 
@@ -107,7 +115,57 @@ The helper early-returns unless `Platform.isMobile`.
   the existing flex centering do the work.
 - **Result:** Reporter: "No change for any of the tests."
 
-## Current code (verbatim summary)
+### Attempt 4 — CSS-only top-anchor; JS helper removed (current)
+
+- **Change:** Deleted `installMobileKeyboardScrollFix` and its four call sites from
+  [src/platform.ts](../src/platform.ts), [src/ui/modal.ts](../src/ui/modal.ts),
+  [src/settings/tab.ts](../src/settings/tab.ts), [src/ui/passphrase-modal.ts](../src/ui/passphrase-modal.ts),
+  and [src/insert.ts](../src/insert.ts). Added a CSS rule in [styles.css](../styles.css): under
+  `.is-mobile`, `.rewrite-modal` (main + passphrase) and `.rewrite-rename-modal` get
+  `align-self: flex-start; margin-top: 8px; margin-bottom: auto; max-height: calc(100% - 16px)`.
+- **Theory:** This is alternative #3b made concrete. The one surface that always worked (the
+  settings tab) is a tall scrollable container where Chromium's native keyboard-aware focus-scroll
+  does the job; the failing surfaces are short fixed-position popups centered by Obsidian's flex.
+  Rather than fight the keyboard with JS that never had a signal to fire on, pin the popup to the
+  top of the screen so the keyboard (which opens from the bottom) cannot cover it. The reporter
+  confirmed other plugins use exactly this workaround.
+- **Why CSS over JS:** Hypothesis A (the keyboard overlays without resizing the viewport) means no
+  JS signal is reliable. CSS positioning needs no signal. `align-self: flex-start` moves only our
+  modal to the top of the flex container; `margin-bottom: auto` is a fallback for non-default flex
+  configurations; scoping to our classes leaves core Obsidian modals untouched.
+- **Caveat for the main modal:** the Paste textarea sits below the template selector and tab row,
+  so top-anchoring lifts it into the upper half of the screen but not to the very top. For the
+  passphrase and rename modals the input is the first field, so they clear fully.
+- **Result:** Confirmed working on device for the simple popups (unlock prompt, rename prompt, Paste
+  textarea itself). Two residual cases remained, both instances of "something pushes the focused
+  element low within a tall popup," fixed in Attempt 4b below.
+
+### Attempt 4b — companion tweaks for tall-popup cases (current)
+
+Top-anchoring fixes popups whose input sits near the top, but two surfaces kept the focused element
+low:
+
+1. **Change passphrase (settings → Change passphrase):** the two passphrase fields render *below* the
+   "Picking a strong passphrase" tips block, so even a top-anchored modal put them in the keyboard
+   zone. Fix: the tips block is now a `<details>` ([src/ui/passphrase-modal.ts](../src/ui/passphrase-modal.ts)
+   `renderPassphraseTips`), expanded by default on every platform (opt-out security guidance) but
+   auto-collapsing on mobile when a passphrase field is focused (`collapseTipsOnMobile`), so the
+   guidance is seen on open yet the fields rise under the title once the user taps in. The first
+   field's `autofocus` is disabled on mobile so the collapse coincides with the user's tap, not a
+   premature programmatic focus.
+2. **Paste tab submit button:** the textarea was fine but the "Clean up" button below it was covered.
+   Fixes: the textarea renders at `rows = 4` on mobile (vs 10 on desktop, [src/ui/modal.ts](../src/ui/modal.ts))
+   with the desktop 160px `min-height` floor dropped to 80px under `.is-mobile`; and the reporter's
+   observation that Obsidian leaves an empty band above the title is addressed by `padding-top: 8px`
+   on `.modal-content` + `margin-top: 0` on the `h2` (mobile-scoped), shifting the whole popup up.
+
+All of these are in [styles.css](../styles.css) plus the two small JS changes noted above. Still
+signal-independent; no `visualViewport` or Capacitor dependency.
+
+## Removed JS helper (Attempts 1-3, verbatim summary — no longer in the codebase)
+
+This describes the `installMobileKeyboardScrollFix` / `liftAboveKeyboard` logic that Attempt 4
+deleted. Retained for history only; none of this runs anymore.
 
 `liftAboveKeyboard(target, vv)`:
 1. `visibleBottom = vv.offsetTop + vv.height`. If `rect.bottom <= visibleBottom - 16`, **return

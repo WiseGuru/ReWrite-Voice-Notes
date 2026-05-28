@@ -11,7 +11,7 @@ import {
 	TranscriptionConfig,
 	TranscriptionProviderID,
 } from '../types';
-import { detectActiveProfileKind, installMobileKeyboardScrollFix } from '../platform';
+import { detectActiveProfileKind } from '../platform';
 import { createTranscriptionProvider } from '../transcription';
 import { createLLMProvider } from '../llm';
 import { formatWhisperStatus } from '../whisper-host';
@@ -53,7 +53,6 @@ export class ReWriteSettingTab extends PluginSettingTab {
 	// the full-container redraws that fire when dropdowns toggle conditional
 	// fields (provider, insertMode, activeProfileOverride).
 	private inactiveProfileExpanded = false;
-	private keyboardScrollFixInstalled = false;
 
 	constructor(app: App, private readonly plugin: ReWritePlugin) {
 		super(app, plugin);
@@ -63,12 +62,6 @@ export class ReWriteSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 		containerEl.addClass('rewrite-settings');
-
-		// containerEl is reused across display() calls, so install once.
-		if (!this.keyboardScrollFixInstalled) {
-			installMobileKeyboardScrollFix(containerEl);
-			this.keyboardScrollFixInstalled = true;
-		}
 
 		this.renderEncryption(containerEl);
 		this.renderActiveProfile(containerEl);
