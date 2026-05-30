@@ -16,11 +16,15 @@ import { createTranscriptionProvider } from '../transcription';
 import { createLLMProvider } from '../llm';
 import { formatWhisperStatus } from '../whisper-host';
 import { populateDefaultTemplates } from '../templates-folder';
+import { populateDefaultSharedCore } from '../shared-core';
 import { populateDefaultAssistantPrompt } from '../assistant-prompt';
 import { populateDefaultKnownNouns } from '../known-nouns';
 import { changeEncryptionMode, EncryptionMode, lockSecrets } from '../secrets';
 import { hydrateSecrets } from '.';
 import { PassphraseModal } from '../ui/passphrase-modal';
+
+// Sentinel value for the "Custom..." entry in a model dropdown; never written to config.model.
+const CUSTOM_MODEL_OPTION = '__rewrite_custom__';
 
 const TRANSCRIPTION_OPTIONS: Array<{ id: TranscriptionProviderID; label: string; desktopOnly?: boolean }> = [
 	{ id: 'openai', label: 'OpenAI Whisper' },
@@ -69,6 +73,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 		this.renderProfile(containerEl, 'mobile');
 		this.renderLocalWhisperServer(containerEl);
 		this.renderTemplates(containerEl);
+		this.renderSharedCore(containerEl);
 		this.renderRecording(containerEl);
 		this.renderAdHocInstructions(containerEl);
 		this.renderKnownNouns(containerEl);
@@ -419,94 +424,108 @@ export class ReWriteSettingTab extends PluginSettingTab {
 
 	private renderTranscriptionModelField(parent: HTMLElement, profile: EnvironmentProfile): void {
 		const wrapper = parent.createDiv({ cls: 'rewrite-model-field' });
-		this.populateTranscriptionModelField(wrapper, profile);
-	}
-
-	private populateTranscriptionModelField(wrapper: HTMLElement, profile: EnvironmentProfile): void {
-		wrapper.empty();
-		const providerId = profile.transcriptionProvider;
-		const provider = createTranscriptionProvider(providerId);
-		const supportsList = typeof provider.listModels === 'function';
-		const cached = this.plugin.settings.modelCache.transcription[providerId]?.ids ?? [];
-		const current = profile.transcriptionConfig.model;
-
-		const setting = new Setting(wrapper).setName('Transcription model');
-		setting.setDesc(modelFieldDesc(transcriptionModelHint(providerId), supportsList, cached.length));
-
-		if (supportsList) {
-			setting.addDropdown((dd) => {
-				dd.addOption('', cached.length === 0 ? '(no cached models)' : '(pick a model)');
-				for (const id of cached) dd.addOption(id, id);
-				dd.setValue(cached.includes(current) ? current : '');
-				dd.onChange(async (v) => {
-					if (!v) return;
-					profile.transcriptionConfig.model = v;
-					await this.commit();
-					this.populateTranscriptionModelField(wrapper, profile);
-				});
-			});
-			setting.addExtraButton((b) => {
-				b.setIcon('refresh-cw').setTooltip('Refresh model list').onClick(async () => {
-					await this.refreshTranscriptionModels(providerId, profile.transcriptionConfig);
-					this.populateTranscriptionModelField(wrapper, profile);
-				});
-			});
-		}
-
-		setting.addText((t) => {
-			t.setValue(current);
-			t.setPlaceholder(supportsList ? '' : transcriptionModelHint(providerId));
-			t.onChange(async (v) => {
-				profile.transcriptionConfig.model = v;
-				await this.commit();
-			});
-		});
+		this.populateModelField(wrapper, profile, 'transcription');
 	}
 
 	private renderLLMModelField(parent: HTMLElement, profile: EnvironmentProfile): void {
 		const wrapper = parent.createDiv({ cls: 'rewrite-model-field' });
-		this.populateLLMModelField(wrapper, profile);
+		this.populateModelField(wrapper, profile, 'llm');
 	}
 
-	private populateLLMModelField(wrapper: HTMLElement, profile: EnvironmentProfile): void {
+	/**
+	 * Renders a single adaptive model control: a dropdown when the provider supports
+	 * listModels and the cache holds models, otherwise a plain text field. The dropdown
+	 * carries a "Custom..." escape hatch that toggles the same control into the text field
+	 * (forceText) so a model not in the catalog can still be typed. The canonical value is
+	 * always config.model; the dropdown and text field both write straight into it.
+	 */
+	private populateModelField(
+		wrapper: HTMLElement,
+		profile: EnvironmentProfile,
+		side: 'transcription' | 'llm',
+		forceText = false,
+	): void {
 		wrapper.empty();
-		const providerId = profile.llmProvider;
-		const provider = createLLMProvider(providerId);
+
+		const isTranscription = side === 'transcription';
+		const provider = isTranscription
+			? createTranscriptionProvider(profile.transcriptionProvider)
+			: createLLMProvider(profile.llmProvider);
+		const config = isTranscription ? profile.transcriptionConfig : profile.llmConfig;
+		const cached = (isTranscription
+			? this.plugin.settings.modelCache.transcription[profile.transcriptionProvider]
+			: this.plugin.settings.modelCache.llm[profile.llmProvider])?.ids ?? [];
+		const hint = isTranscription
+			? transcriptionModelHint(profile.transcriptionProvider)
+			: llmModelHint(profile.llmProvider);
+		const current = config.model;
 		const supportsList = typeof provider.listModels === 'function';
-		const cached = this.plugin.settings.modelCache.llm[providerId]?.ids ?? [];
-		const current = profile.llmConfig.model;
+		const showDropdown = supportsList && cached.length > 0 && !forceText;
 
-		const setting = new Setting(wrapper).setName('LLM model');
-		setting.setDesc(modelFieldDesc(llmModelHint(providerId), supportsList, cached.length));
+		const mode: ModelFieldMode = !supportsList
+			? 'plain'
+			: forceText
+				? 'custom'
+				: cached.length === 0
+					? 'empty-cache'
+					: 'dropdown';
 
-		if (supportsList) {
+		const setting = new Setting(wrapper)
+			.setName(isTranscription ? 'Transcription model' : 'LLM model')
+			.setDesc(modelFieldDesc(hint, mode));
+
+		const refresh = async (): Promise<void> => {
+			if (isTranscription) {
+				await this.refreshTranscriptionModels(profile.transcriptionProvider, profile.transcriptionConfig);
+			} else {
+				await this.refreshLLMModels(profile.llmProvider, profile.llmConfig);
+			}
+			this.populateModelField(wrapper, profile, side, false);
+		};
+
+		if (showDropdown) {
 			setting.addDropdown((dd) => {
-				dd.addOption('', cached.length === 0 ? '(no cached models)' : '(pick a model)');
+				if (!current) dd.addOption('', '(pick a model)');
 				for (const id of cached) dd.addOption(id, id);
-				dd.setValue(cached.includes(current) ? current : '');
+				if (current && !cached.includes(current)) dd.addOption(current, `${current} (custom)`);
+				dd.addOption(CUSTOM_MODEL_OPTION, 'Custom...');
+				dd.setValue(current || '');
 				dd.onChange(async (v) => {
-					if (!v) return;
-					profile.llmConfig.model = v;
+					if (v === CUSTOM_MODEL_OPTION) {
+						this.populateModelField(wrapper, profile, side, true);
+						return;
+					}
+					config.model = v;
 					await this.commit();
-					this.populateLLMModelField(wrapper, profile);
+					this.populateModelField(wrapper, profile, side, false);
 				});
 			});
 			setting.addExtraButton((b) => {
-				b.setIcon('refresh-cw').setTooltip('Refresh model list').onClick(async () => {
-					await this.refreshLLMModels(providerId, profile.llmConfig);
-					this.populateLLMModelField(wrapper, profile);
-				});
+				b.setIcon('refresh-cw').setTooltip('Refresh model list').onClick(() => void refresh());
 			});
+			return;
 		}
 
 		setting.addText((t) => {
 			t.setValue(current);
-			t.setPlaceholder(supportsList ? '' : llmModelHint(providerId));
+			t.setPlaceholder(hint);
 			t.onChange(async (v) => {
-				profile.llmConfig.model = v;
+				config.model = v;
 				await this.commit();
 			});
 		});
+
+		if (forceText && cached.length > 0) {
+			setting.addExtraButton((b) => {
+				b.setIcon('list').setTooltip('Back to list').onClick(() => {
+					this.populateModelField(wrapper, profile, side, false);
+				});
+			});
+		} else if (supportsList) {
+			setting.addExtraButton((b) => {
+				b.setIcon('refresh-cw').setTooltip('Refresh model list').onClick(() => void refresh());
+			});
+		}
 	}
 
 	private async refreshTranscriptionModels(
@@ -670,13 +689,18 @@ export class ReWriteSettingTab extends PluginSettingTab {
 
 		new Setting(parent)
 			.setName('Populate with default templates')
-			.setDesc('Writes the seven built-in templates into the folder above. Skips any whose ID already exists, so re-running tops up after a deletion.')
+			.setDesc('Writes the seven built-in templates into the folder above, and the shared core file if it is missing. Skips any whose ID already exists, so re-running tops up after a deletion.')
 			.addButton((b) => {
 				b.setButtonText('Populate').setCta().onClick(async () => {
 					try {
 						const result = await populateDefaultTemplates(this.app, s.templatesFolderPath);
 						await this.plugin.refreshTemplates();
-						new Notice(`ReWrite: populated ${result.folder}. Created ${result.created}, skipped ${result.skipped}.`);
+						// The shared core is load-bearing for the default templates' quality
+						// (it carries the guardrail + output discipline), so seed it alongside.
+						const coreCreated = await populateDefaultSharedCore(this.app, s.sharedCorePath);
+						await this.plugin.refreshSharedCore();
+						const coreNote = coreCreated ? ` Created ${s.sharedCorePath}.` : '';
+						new Notice(`ReWrite: populated ${result.folder}. Created ${result.created}, skipped ${result.skipped}.${coreNote}`);
 						this.display();
 					} catch (e) {
 						new Notice(`ReWrite: populate failed. ${e instanceof Error ? e.message : String(e)}`);
@@ -832,6 +856,68 @@ export class ReWriteSettingTab extends PluginSettingTab {
 		}
 	}
 
+	private renderSharedCore(parent: HTMLElement): void {
+		const heading = new Setting(parent).setName('Shared core').setHeading();
+		const enabled = this.plugin.sharedCore !== null;
+		heading.nameEl.createSpan({
+			cls: `rewrite-status-badge ${enabled ? 'is-enabled' : 'is-disabled'}`,
+			text: enabled ? 'Enabled' : 'Disabled',
+		});
+		parent.createEl('p', {
+			text: 'A vault file whose text is prepended to every template prompt: the anti-injection guardrail, baseline cleanup rules, and output discipline. Edit it once to change the baseline for all templates. It is sent on every cleanup call, so trim it if you want to save tokens. To skip it for one specific template, add "disableSharedCore: true" to that template\'s frontmatter. Deleting or emptying this file disables the shared core for the whole plugin.',
+			cls: 'rewrite-section-desc',
+		});
+
+		new Setting(parent)
+			.setName('Shared core file')
+			.setDesc('Vault-relative path. The file body is the shared preface; any frontmatter is guidance only and is not sent to the LLM.')
+			.addText((t) => {
+				t.setValue(this.plugin.settings.sharedCorePath);
+				t.setPlaceholder('ReWrite/SharedCore.md');
+				t.onChange(async (v) => {
+					this.plugin.settings.sharedCorePath = v;
+					await this.commit();
+					await this.plugin.refreshSharedCore();
+				});
+			});
+
+		new Setting(parent)
+			.setName('Re-create shared core file')
+			.setDesc('Writes a starter file with the default shared core. Skipped if the file already exists; delete the file first to restore the default.')
+			.addButton((b) => {
+				b.setButtonText('Populate').setCta().onClick(async () => {
+					try {
+						const created = await populateDefaultSharedCore(this.app, this.plugin.settings.sharedCorePath);
+						await this.plugin.refreshSharedCore();
+						new Notice(created
+							? `ReWrite: created ${this.plugin.settings.sharedCorePath}.`
+							: `ReWrite: ${this.plugin.settings.sharedCorePath} already exists.`);
+						this.display();
+					} catch (e) {
+						new Notice(`ReWrite: ${e instanceof Error ? e.message : String(e)}`);
+					}
+				});
+			})
+			.addExtraButton((b) => {
+				b.setIcon('external-link').setTooltip('Open file in a new pane').onClick(() => {
+					const path = this.plugin.settings.sharedCorePath.trim();
+					if (!path) {
+						new Notice('Set a shared core path first.');
+						return;
+					}
+					void this.app.workspace.openLinkText(path, '', true);
+				});
+			});
+
+		const loaded = this.plugin.sharedCore;
+		parent.createEl('p', {
+			text: loaded
+				? `Loaded ${loaded.length.toLocaleString()} characters. Prepended to every template prompt unless disabled per template.`
+				: 'No shared core loaded. Template prompts are sent as-is, with no shared preface.',
+			cls: 'rewrite-section-desc',
+		});
+	}
+
 	private renderKnownNouns(parent: HTMLElement): void {
 		new Setting(parent).setName('Known nouns').setHeading();
 		parent.createEl('p', {
@@ -890,10 +976,19 @@ export class ReWriteSettingTab extends PluginSettingTab {
 	}
 }
 
-function modelFieldDesc(hint: string, supportsList: boolean, cachedCount: number): string {
-	if (!supportsList) return hint;
-	if (cachedCount === 0) return `${hint} Or click Refresh to load models from the provider.`;
-	return `${hint} Pick from the dropdown, or type a custom model name.`;
+type ModelFieldMode = 'plain' | 'empty-cache' | 'dropdown' | 'custom';
+
+function modelFieldDesc(hint: string, mode: ModelFieldMode): string {
+	switch (mode) {
+		case 'plain':
+			return hint;
+		case 'empty-cache':
+			return `${hint} Click Refresh to load models from the provider.`;
+		case 'dropdown':
+			return `${hint} Pick a model, or choose Custom... to type one.`;
+		case 'custom':
+			return `${hint} Type a model ID, or use Back to list.`;
+	}
 }
 
 function transcriptionModelHint(id: TranscriptionProviderID): string {

@@ -87,6 +87,13 @@ async function parseTemplateFile(app: App, file: TFile): Promise<NoteTemplate | 
 	const newFileNameTemplateRaw = typeof obj.newFileNameTemplate === 'string' ? obj.newFileNameTemplate : '';
 	const newFileNameTemplate = newFileNameTemplateRaw || 'ReWrite {{date}} {{time}}';
 
+	// Tolerate both a YAML boolean (`true`) and a string ("true"), since editing
+	// the property via Obsidian's Properties UI may store it as text. An empty
+	// value (null) or anything else means "not disabled".
+	const rawDisable = obj.disableSharedCore;
+	const disableSharedCore = rawDisable === true
+		|| (typeof rawDisable === 'string' && rawDisable.trim().toLowerCase() === 'true');
+
 	return {
 		id,
 		name,
@@ -94,6 +101,7 @@ async function parseTemplateFile(app: App, file: TFile): Promise<NoteTemplate | 
 		insertMode,
 		newFileFolder,
 		newFileNameTemplate,
+		disableSharedCore,
 	};
 }
 
@@ -151,7 +159,12 @@ function renderTemplateFile(template: NoteTemplate): string {
 		newFileFolder: template.newFileFolder,
 		newFileNameTemplate: template.newFileNameTemplate,
 	}).replace(/\n+$/, '');
-	return `---\n${fm}\n---\n${template.prompt}\n`;
+	// Always surface the disableSharedCore knob: present so it is easy to find,
+	// empty (null) so it does not apply until the user sets it to `true`.
+	const disableLine = template.disableSharedCore
+		? 'disableSharedCore: true'
+		: 'disableSharedCore:';
+	return `---\n${fm}\n${disableLine}\n---\n${template.prompt}\n`;
 }
 
 function sanitizeFilename(name: string): string {

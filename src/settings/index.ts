@@ -54,6 +54,7 @@ export const DEFAULT_SETTINGS: GlobalSettings = {
 	lastUsedTemplateId: '',
 	recordingFormat: 'webm',
 	templatesFolderPath: 'ReWrite/Templates',
+	sharedCorePath: 'ReWrite/SharedCore.md',
 	attachmentsFolderPath: '',
 	newFileCollisionMode: 'auto',
 	adHocInstructionsEnabled: false,

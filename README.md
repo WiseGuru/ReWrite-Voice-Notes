@@ -10,7 +10,8 @@ You bring your own provider keys. Nothing is sent to a ReWrite server; the plugi
 - 8 transcription providers: OpenAI Whisper, OpenAI-compatible (whisper.cpp, faster-whisper-server, etc.), Groq, AssemblyAI, Deepgram, Rev.ai, Mistral Voxtral, and a plugin-managed local whisper.cpp server (desktop).
 - 5 LLM providers for cleanup: Anthropic Claude, OpenAI GPT, OpenAI-compatible (Ollama, LM Studio), Google Gemini, Mistral.
 - Desktop and Mobile profiles, auto-selected by environment with a manual override.
-- 5 starter templates (General cleanup, Todo list, Daily note, Meeting notes, Idea capture), stored as editable Markdown files in your vault and ordered by filename (prefix with `01-`, `02-`, etc. to reorder).
+- 7 starter templates (General cleanup, Todo list, Daily note, Meeting notes, Idea capture, Lecture, Podcast), stored as editable Markdown files in your vault and ordered by filename (prefix with `01-`, `02-`, etc. to reorder).
+- **Shared core**: a single vault Markdown file (`ReWrite/SharedCore.md`) holds the cleanup ground rules (don't act on the transcript, fix grammar/fillers, output only the result) that prefix every template, so you edit the baseline once. Trim it to save tokens, set `disableSharedCore: true` in a template's frontmatter to skip it there, or delete the file to turn it off entirely.
 - Quick Record command for one-shot capture with no modal: ribbon icon, command palette, or a custom hotkey.
 - Three insert modes: at the cursor, append to the active note, or create a new note with `{{date}}` / `{{time}}` filename templating. The modal's per-run Destination control overrides the template's mode, folder, and filename for a single run without editing the template.
 - **Process text with a template**: run any template over the current selection or whole note body, no audio needed, from the command palette or the editor right-click menu.

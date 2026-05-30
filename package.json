@@ -1,6 +1,6 @@
 {
 	"name": "rewrite-plugin",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Record or paste speech and have it transcribed and structured by AI.",
 	"main": "main.js",
 	"type": "module",

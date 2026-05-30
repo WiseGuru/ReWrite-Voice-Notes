@@ -105,7 +105,11 @@ async function cleanupTranscript(params: PipelineParams, transcript: string): Pr
 	if (params.profile.llmProvider === 'none') {
 		return transcript;
 	}
-	let systemPrompt = params.template.prompt;
+	// Prepend the shared core preface (loaded from the vault SharedCore.md file)
+	// unless this template opted out via `disableSharedCore`. When no shared core
+	// is loaded (file missing/empty/deleted), nothing is prepended.
+	const sharedCore = params.template.disableSharedCore ? null : params.host.sharedCore;
+	let systemPrompt = sharedCore ? `${sharedCore}\n\n${params.template.prompt}` : params.template.prompt;
 	let workingTranscript = transcript;
 	if (params.settings.adHocInstructionsEnabled && params.settings.assistantName.trim().length > 0) {
 		const { transcript: stripped, instructions } = extractAdHocInstructions(transcript, params.settings.assistantName);

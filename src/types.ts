@@ -40,6 +40,9 @@ export interface NoteTemplate {
 	insertMode: InsertMode;
 	newFileFolder: string;
 	newFileNameTemplate: string;
+	// When true, the shared core preface is NOT prepended to this template's
+	// prompt. Absent/false means the shared core is used (when one is loaded).
+	disableSharedCore?: boolean;
 }
 
 export interface DestinationOverride {
@@ -54,6 +57,7 @@ export interface KnownNoun {
 }
 
 export interface PipelineHost {
+	sharedCore: string | null;
 	assistantPrompt: string | null;
 	knownNouns: KnownNoun[];
 }
@@ -96,6 +100,7 @@ export interface GlobalSettings {
 	lastUsedTemplateId: string;
 	recordingFormat: RecordingFormatPreference;
 	templatesFolderPath: string;
+	sharedCorePath: string;
 	attachmentsFolderPath: string;
 	newFileCollisionMode: NewFileCollisionMode;
 	adHocInstructionsEnabled: boolean;

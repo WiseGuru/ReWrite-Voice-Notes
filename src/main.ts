@@ -14,6 +14,7 @@ import { WhisperHost } from './whisper-host';
 import { bindWhisperHost } from './transcription/whisper-local';
 import { resolveActiveProfile } from './platform';
 import { isPathInTemplatesFolder, loadTemplatesFromFolder } from './templates-folder';
+import { isPathSharedCore, loadSharedCoreFromFile } from './shared-core';
 import { isPathAssistantPrompt, loadAssistantPromptFromFile } from './assistant-prompt';
 import { isPathKnownNouns, loadKnownNounsFromFile } from './known-nouns';
 import { EncryptionStatus, getEncryptionStatus, unlockSecrets } from './secrets';
@@ -22,6 +23,7 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 	settings!: GlobalSettings;
 	whisperHost!: WhisperHost;
 	templates: NoteTemplate[] = [];
+	sharedCore: string | null = null;
 	assistantPrompt: string | null = null;
 	knownNouns: KnownNoun[] = [];
 	encryptionStatus!: EncryptionStatus;
@@ -156,6 +158,7 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 
 		this.app.workspace.onLayoutReady(() => {
 			void this.refreshTemplates();
+			void this.refreshSharedCore();
 			void this.refreshAssistantPrompt();
 			void this.refreshKnownNouns();
 		});
@@ -209,6 +212,10 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 		this.templates = await loadTemplatesFromFolder(this.app, this.settings.templatesFolderPath);
 	}
 
+	async refreshSharedCore(): Promise<void> {
+		this.sharedCore = await loadSharedCoreFromFile(this.app, this.settings.sharedCorePath);
+	}
+
 	async refreshAssistantPrompt(): Promise<void> {
 		this.assistantPrompt = await loadAssistantPromptFromFile(this.app, this.settings.assistantPromptPath);
 	}
@@ -220,6 +227,9 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 	private onVaultFileChanged(path: string): void {
 		if (this.isInTemplatesFolder(path)) {
 			void this.refreshTemplates();
+		}
+		if (isPathSharedCore(path, this.settings.sharedCorePath)) {
+			void this.refreshSharedCore();
 		}
 		if (isPathAssistantPrompt(path, this.settings.assistantPromptPath)) {
 			void this.refreshAssistantPrompt();
