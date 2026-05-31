@@ -699,7 +699,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 
 		new Setting(parent)
 			.setName('Extra args')
-			.setDesc('Space-separated CLI args appended after -m, --port. Split on whitespace only, so a single value containing spaces (such as a quoted path) is not supported.')
+			.setDesc('Space-separated CLI args appended after -m, --port. Split on whitespace only, so a single value containing spaces (such as a quoted path) is not supported. The server has no authentication; ReWrite always binds it to 127.0.0.1 and refuses to start if a --host here points at a non-loopback interface.')
 			.addText((t) => {
 				t.setValue(cfg.extraArgs);
 				t.onChange(async (v) => {

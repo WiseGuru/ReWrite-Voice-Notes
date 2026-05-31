@@ -208,10 +208,21 @@ export class WhisperHost {
 		this.logBuffer = '';
 		this.stoppingDeliberately = false;
 
+		const extra = splitArgs(config.extraArgs);
+		// The whisper.cpp server has no authentication or TLS. Refuse to bind it
+		// to anything other than loopback so a stray --host in Extra args cannot
+		// silently expose an open transcription service to the LAN, and pin
+		// 127.0.0.1 ourselves when the user did not specify a host (so we don't
+		// rely on upstream's default binding staying loopback).
+		const hostArg = getHostArg(extra);
+		if (hostArg !== null && !isLoopbackHost(hostArg)) {
+			throw new Error(`Refusing to start: --host ${hostArg || '(empty)'} would bind whisper-server to a non-loopback interface, exposing an unauthenticated transcription server to your network. Remove it from Extra args; ReWrite always binds 127.0.0.1.`);
+		}
 		const args = [
 			'-m', config.modelPath,
 			'--port', String(port),
-			...splitArgs(config.extraArgs),
+			...(hostArg === null ? ['--host', '127.0.0.1'] : []),
+			...extra,
 		];
 		const child = api.cp.spawn(config.binaryPath, args, {
 			stdio: ['ignore', 'pipe', 'pipe'],
@@ -434,6 +445,29 @@ function splitArgs(s: string): string[] {
 	const trimmed = s.trim();
 	if (!trimmed) return [];
 	return trimmed.split(/\s+/);
+}
+
+// Find the value of a --host argument in an already-tokenized arg list.
+// Supports both `--host 127.0.0.1` and `--host=127.0.0.1`. Returns the value
+// (possibly empty string) when present, or null when no --host is given.
+function getHostArg(args: string[]): string | null {
+	for (let i = 0; i < args.length; i++) {
+		const a = args[i];
+		if (a === '--host') {
+			return args[i + 1] ?? '';
+		}
+		if (a !== undefined && a.startsWith('--host=')) {
+			return a.slice('--host='.length);
+		}
+	}
+	return null;
+}
+
+// Whether a host value binds only the loopback interface. Anything else
+// (0.0.0.0, a LAN IP, a hostname) would expose the unauthenticated server.
+function isLoopbackHost(host: string): boolean {
+	const h = host.trim().toLowerCase();
+	return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]';
 }
 
 function isPortInUse(net: NetAPI, port: number): Promise<boolean> {

@@ -54,6 +54,8 @@ If you want fully on-device transcription with no network calls, the plugin can 
 
 When you click Start in settings, the plugin launches whisper-server as a child process and communicates with it over loopback (`http://127.0.0.1:<port>`). The process is captured in a ring-buffered log you can view in settings. When you click Stop, or when the plugin is unloaded, the process is terminated. No code is downloaded or executed beyond the binary you provide.
 
+**Network exposure**: whisper-server has no authentication and no TLS, so anyone who can reach its port can submit audio and exercise its native audio-decoding code. To keep it private, ReWrite always passes `--host 127.0.0.1` (loopback only) and **refuses to start** if you put a `--host` pointing at a non-loopback interface (such as `0.0.0.0` or a LAN IP) in Extra args. If you run whisper-server yourself from a terminal instead of letting the plugin manage it, bind it to `127.0.0.1` the same way; do not expose it to your network unless you have put your own authenticating proxy in front of it.
+
 ### Setup
 
 1. Obtain a `whisper-server` binary:
@@ -99,7 +101,7 @@ whisper.cpp doesn't publish prebuilt Linux binaries, so you need to compile it o
 
    Copy or symlink it somewhere stable (e.g. `~/.local/bin/whisper-server`) if you want to keep the absolute path short. Make sure it is executable: `chmod +x build/bin/whisper-server`.
 
-4. Use that absolute path as Binary path in the plugin's "Local whisper.cpp server (desktop)" settings section. To sanity-check the binary outside the plugin first, run it once from a terminal with a model file: `./build/bin/whisper-server -m /path/to/model.bin --port 8080`. You should see `whisper server listening at http://127.0.0.1:8080`. Hit Ctrl-C to stop, then let the plugin manage it from there.
+4. Use that absolute path as Binary path in the plugin's "Local whisper.cpp server (desktop)" settings section. To sanity-check the binary outside the plugin first, run it once from a terminal with a model file: `./build/bin/whisper-server -m /path/to/model.bin --host 127.0.0.1 --port 8080`. You should see `whisper server listening at http://127.0.0.1:8080`. Pass `--host 127.0.0.1` so the unauthenticated server stays bound to loopback and is not reachable from your network. Hit Ctrl-C to stop, then let the plugin manage it from there.
 
 If `cmake --build` fails with `error: 'std::filesystem' has not been declared` or similar C++17 errors, your distro's default GCC is too old. Install a newer one (`sudo apt install g++-12` on Ubuntu) and rerun the `cmake -B build ...` step with `-DCMAKE_CXX_COMPILER=g++-12` appended.
 
@@ -125,11 +127,13 @@ The published checkpoints are quantized to `q8_0` and ship in the same GGML cont
 
 2. In ReWrite settings under "Local whisper.cpp server (desktop)", set Model path to the absolute path of the FUTO `.bin` you just downloaded. Binary path and Port are unchanged from the standard setup above.
 
-3. Expand the "Advanced" disclosure inside that section and set Extra args to:
+3. Set Extra args (in the "Local whisper.cpp server (desktop)" section) to:
 
    ```
    -ac 768
    ```
+
+   Do not add a `--host` here pointing at a non-loopback interface; ReWrite binds the server to `127.0.0.1` and will refuse to start otherwise (the server is unauthenticated).
 
    `-ac` (alias `--audio-context`) caps the encoder context at the given number of mel frames. Lower values run faster but only stay accurate on ACFT-finetuned models, which is the whole point of using them. A few starting points:
 
