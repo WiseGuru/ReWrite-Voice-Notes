@@ -43,8 +43,8 @@ Detailed rules:
 		prompt:
 			`Lay the transcript into a daily note using these "##" sections in order:
 
-## Braindump
-The entire cleaned transcript, as prose or bullet points, whichever fits. Drop nothing of substance here.
+## Calendar
+Scheduled events with their date or time, as bullets. Omit this heading if none.
 
 ## Goals
 Strategic directions or longer-term intentions the speaker expressed, as bullets. Omit this heading if none.
@@ -52,8 +52,8 @@ Strategic directions or longer-term intentions the speaker expressed, as bullets
 ## Tasks
 Concrete, achievable actions, as a checkbox list ("- [ ] "). Omit this heading if none.
 
-## Calendar
-Scheduled events with their date or time, as bullets. Omit this heading if none.
+## Braindump
+The entire cleaned transcript, as prose or bullet points, whichever fits. Drop nothing of substance here.
 
 Goals, Tasks, and Calendar are extracted from what the speaker actually said in the braindump; do not invent items. The Braindump section is always present.`,
 		insertMode: 'newFile',
