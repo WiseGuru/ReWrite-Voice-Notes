@@ -17,6 +17,7 @@ import { createLLMProvider } from '../llm';
 import { formatWhisperStatus } from '../whisper-host';
 import { populateDefaultTemplates } from '../templates-folder';
 import { populateDefaultSharedCore } from '../shared-core';
+import { populateTemplateGuide } from '../template-guide';
 import { populateDefaultAssistantPrompt } from '../assistant-prompt';
 import { populateDefaultKnownNouns } from '../known-nouns';
 import { changeEncryptionMode, EncryptionMode, lockSecrets, resetSecrets } from '../secrets';
@@ -781,7 +782,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 
 		new Setting(parent)
 			.setName('Populate with default templates')
-			.setDesc('Writes the seven built-in templates into the folder above, plus the shared core file if it is missing. It skips any template that already exists, so you can run it again to top up after deleting one.')
+			.setDesc('Writes the seven built-in templates into the folder above, plus the shared core file and a template guide if they are missing. It skips any template that already exists, so you can run it again to top up after deleting one.')
 			.addButton((b) => {
 				b.setButtonText('Populate').setCta().onClick(() => void this.runGuardedButton(b, async () => {
 					try {
@@ -791,8 +792,12 @@ export class ReWriteSettingTab extends PluginSettingTab {
 						// (it carries the guardrail + output discipline), so seed it alongside.
 						const coreCreated = await populateDefaultSharedCore(this.app, s.sharedCorePath);
 						await this.plugin.refreshSharedCore();
+						// Seed the human-facing template guide next to the templates folder.
+						// The plugin never reads it; it just teaches the template format.
+						const guideCreated = await populateTemplateGuide(this.app, s.templatesFolderPath);
 						const coreNote = coreCreated ? ` Created ${s.sharedCorePath}.` : '';
-						new Notice(`ReWrite: populated ${result.folder}. Created ${result.created}, skipped ${result.skipped}.${coreNote}`);
+						const guideNote = guideCreated ? ' Added the template guide.' : '';
+						new Notice(`ReWrite: populated ${result.folder}. Created ${result.created}, skipped ${result.skipped}.${coreNote}${guideNote}`);
 						this.display();
 					} catch (e) {
 						console.error('ReWrite: populate templates failed', e);

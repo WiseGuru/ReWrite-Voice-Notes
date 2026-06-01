@@ -21,6 +21,23 @@ Voxtral exposes a real-time STT model that doesn't accept whole-file uploads, an
 - Provider-side gating: only enable for transcription providers that expose a realtime endpoint; document which.
 - Honest assessment: this is lower-value than the rest of the plugin (transcript with no cleanup is what Obsidian's existing voice plugins already do). Ship only if users ask.
 
+### 3. Optional per-invocation speaker/context hint for the LLM
+
+Let the user supply a short, free-text note about who is speaking and what the recording is, fed to the cleanup LLM as extra context. Examples: "Lecture given by Dr. Smith on thermodynamics", "Podcast interview between Joe Rogan and Satan", "Meeting with Rachel, Joe, Billy, and Sally". This helps the LLM attribute statements, spell names correctly (it overlaps with but is more situational than the persistent Known nouns list), and pick the right register, and it pairs naturally with diarization (map `Speaker A/B/...` to real names).
+
+Decided so far:
+
+- **Gated by a per-template frontmatter flag.** A template opts into the context field via a frontmatter boolean (e.g. `enableContextHint: true`), so only the templates that benefit (Lecture, Meeting notes, Podcast) surface it. Templates without the flag never show the field. Follow the `disableSharedCore` precedent in [src/templates-folder.ts](../src/templates-folder.ts) (`parseTemplateFile` reads it, `renderTemplateFile` always emits the key for discoverability) — but note this one is a positive opt-in, not an opt-out, so the polarity is the reverse of [[shared-core-disable-flag-polarity]].
+- **Rendered as a collapsed (unexpanded) section in the popup.** When the active template has the flag, the field appears as a `<details>` that is collapsed by default, in both the main plugin modal AND the "Reprocess audio..." popup. The user expands it only when they want to add context, so the frictionless default path is untouched. Expand state should survive the modal's full-container re-renders (track it on the modal instance, same as `destinationExpanded` / `inactiveProfileExpanded`).
+
+Design questions to resolve when picking this up:
+
+- **Per-invocation value vs per-template default.** The flag controls *visibility*; still TBD whether the template also seeds a default string the user can edit per invocation, or whether the field is always empty until typed. Leaning: flag gates visibility, value is per-invocation and ephemeral (resets when the modal closes / template changes, like the destination override).
+- **Which entry points.** Main modal and the "Reprocess audio..." popup get the collapsed section (per above). Quick Record and the text/process-text paths stay frictionless and skip it, matching how destination-override is modal-only.
+- **Where it goes in the system prompt.** A new `## Context` (or `## Speakers`) block in `cleanupTranscript` ([src/pipeline.ts](../src/pipeline.ts)), ordered after the template prompt and ad-hoc instructions, before/after Known nouns (TBD). Plumb through `PipelineParams` (per-invocation) and/or `PipelineHost`/`NoteTemplate` (per-template), same pattern as the existing system-prompt sections.
+- **Injection surface.** Like the other vault/transcript inputs, this text flows into the system prompt unescaped, so it sits behind the shared-core anti-injection guardrail; no new escaping needed, but note it where the other injection caveats live.
+- **Relationship to diarization and Known nouns.** Document that this is the situational, one-off counterpart to the persistent Known nouns list, and that it complements the speaker labels diarization emits rather than replacing them.
+
 ---
 
 ## Done

@@ -56,6 +56,7 @@ src/
 ├── insert.ts                        # cursor/newFile/append + {{date}}/{{time}} expansion
 ├── whisper-host.ts                  # Spawns/stops a user-supplied whisper-server child process (desktop only)
 ├── templates-folder.ts              # Load templates from a vault folder + populate it with the 7 defaults
+├── template-guide.ts                # Populate a human-facing "Template guide.md" next to the templates folder (never loaded by the plugin)
 ├── shared-core.ts                   # Load the shared cleanup preface from a vault Markdown file + populate default (prepended to every template prompt)
 ├── assistant-prompt.ts              # Load the ad-hoc-instructions assistant prompt from a vault Markdown file + populate default
 ├── known-nouns.ts                   # Load a vault Markdown file of known nouns + populate default + build the system-prompt section
@@ -184,7 +185,7 @@ The 7 defaults ([src/settings/default-templates.ts](src/settings/default-templat
 
 `NoteTemplate.disableSharedCore?: boolean` (frontmatter `disableSharedCore: true`) opts a single template out of the shared-core prepend. `renderTemplateFile` ALWAYS emits the key so the knob is discoverable: empty (`disableSharedCore:`, parses to null = not disabled) by default, `disableSharedCore: true` when set. `parseTemplateFile` treats it as disabled only when the value is boolean `true` or the string `"true"` (case-insensitive) — the string form is tolerated because Obsidian's Properties UI may store an edited value as text; any other value (null/empty/false) means not disabled.
 
-The Templates "Populate" button also seeds SharedCore.md when missing (non-destructive), because the shared core is load-bearing for the default templates' quality (it carries their guardrail + output discipline). Populating templates without it would yield prompts with no guardrail.
+The Templates "Populate" button also seeds SharedCore.md when missing (non-destructive), because the shared core is load-bearing for the default templates' quality (it carries their guardrail + output discipline). Populating templates without it would yield prompts with no guardrail. It additionally writes a human-facing "Template guide.md" via `populateTemplateGuide` ([src/template-guide.ts](src/template-guide.ts)): a Markdown doc explaining the frontmatter properties, how the shared core combines with a template at run time, and how to word prompts. The guide is placed in the PARENT of the templates folder (the `ReWrite` root by default; vault root if the templates folder has no parent), NOT inside the templates folder, so `loadTemplatesFromFolder` never tries to parse it as a template. The plugin never reads or caches the guide and never sends it to a provider; it has no `loadX`/`isPathX`/cache/refresh, only `populateTemplateGuide` (non-destructive, skipped when the file exists). Keep `DEFAULT_TEMPLATE_GUIDE` in sync if you change a frontmatter property, the prompt-assembly order, or what the shared core carries.
 
 ## Shared core
 
