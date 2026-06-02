@@ -1,6 +1,6 @@
 import { LLMConfig } from '../types';
 import { jsonGet, jsonPost } from '../http';
-import { LLMProvider } from './index';
+import { LLMProvider, remapOutputLimitError } from './index';
 
 interface MessagesResponse {
 	content?: Array<{ type?: string; text?: string }>;
@@ -42,7 +42,7 @@ export function createAnthropicLLM(): LLMProvider {
 					...ANTHROPIC_HEADERS,
 				},
 				signal,
-			);
+			).catch(remapOutputLimitError);
 			const firstText = response.content?.find((block) => block.type === 'text' && typeof block.text === 'string');
 			if (!firstText || typeof firstText.text !== 'string') {
 				throw new Error(`anthropic: response missing text content (stop_reason=${response.stop_reason ?? 'unknown'})`);

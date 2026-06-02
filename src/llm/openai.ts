@@ -1,6 +1,6 @@
 import { LLMConfig, LLMProviderID } from '../types';
 import { jsonGet, jsonPost } from '../http';
-import { LLMProvider } from './index';
+import { LLMProvider, remapOutputLimitError } from './index';
 
 interface ChatCompletionResponse {
 	choices?: Array<{
@@ -10,6 +10,15 @@ interface ChatCompletionResponse {
 
 interface ModelsListResponse {
 	data?: Array<{ id?: unknown }>;
+}
+
+// OpenAI's reasoning models (o1/o3/o4 families, gpt-5 family) reject the legacy
+// `max_tokens` param and require `max_completion_tokens`. Scoped to id === 'openai'
+// because only the first-party endpoint enforces this; openai-compatible servers
+// and Mistral keep `max_tokens`. A proxied reasoning model behind openai-compatible
+// is the known gap (documented in CLAUDE.md).
+function usesCompletionTokens(id: LLMProviderID, model: string): boolean {
+	return id === 'openai' && /^(o\d|gpt-5)/i.test(model.trim());
 }
 
 export function createOpenAILLM(id: LLMProviderID): LLMProvider {
@@ -31,14 +40,20 @@ export function createOpenAILLM(id: LLMProviderID): LLMProvider {
 					{ role: 'user', content: userMessage },
 				],
 			};
-			if (config.maxTokens > 0) body.max_tokens = config.maxTokens;
+			if (config.maxTokens > 0) {
+				if (usesCompletionTokens(id, config.model)) {
+					body.max_completion_tokens = config.maxTokens;
+				} else {
+					body.max_tokens = config.maxTokens;
+				}
+			}
 			const response = await jsonPost<ChatCompletionResponse>(
 				id,
 				url,
 				body,
 				{ Authorization: `Bearer ${config.apiKey}` },
 				signal,
-			);
+			).catch(remapOutputLimitError);
 			const content = response.choices?.[0]?.message?.content;
 			if (typeof content !== 'string') {
 				throw new Error(`${id}: response missing message content`);
