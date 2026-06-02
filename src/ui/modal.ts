@@ -7,6 +7,10 @@ import { DestinationOverride, EnvironmentProfile, InsertMode, NoteTemplate } fro
 import { isProfileConfigured, isProfileConfiguredForText, renderSetupCard } from './setup-card';
 import { resolveActiveTextSource } from './text-source';
 
+// Continuous silence (ms) before the Record UI warns about a muted / dead mic.
+const SILENCE_WARNING_MS = 3000;
+const SILENCE_WARNING_TEXT = 'No audio detected. Check that your microphone is on and not muted.';
+
 export class ReWriteModal extends Modal {
 	private templateId: string;
 	private activeTab: 'record' | 'paste' | 'fromNote' = 'record';
@@ -323,6 +327,11 @@ export class ReWriteModal extends Modal {
 		const dot = indicator.createSpan({ cls: 'rewrite-pulse-dot' });
 		dot.hide();
 		const timer = indicator.createSpan({ cls: 'rewrite-timer', text: '0:00' });
+		const warning = parent.createDiv({
+			cls: 'rewrite-silence-warning',
+			text: SILENCE_WARNING_TEXT,
+		});
+		warning.hide();
 
 		let isRecording = false;
 		const handleClick = async (): Promise<void> => {
@@ -337,7 +346,7 @@ export class ReWriteModal extends Modal {
 				isRecording = true;
 				button.setText('Stop');
 				dot.show();
-				this.startTimerLoop(timer);
+				this.startTimerLoop(timer, warning);
 			} else {
 				button.disabled = true;
 				try {
@@ -345,6 +354,7 @@ export class ReWriteModal extends Modal {
 					isRecording = false;
 					button.setText('Record');
 					dot.hide();
+					warning.hide();
 					this.stopTimerLoop();
 					await this.execute(source);
 				} catch (e) {
@@ -352,6 +362,7 @@ export class ReWriteModal extends Modal {
 					isRecording = false;
 					button.setText('Record');
 					dot.hide();
+					warning.hide();
 					this.stopTimerLoop();
 				} finally {
 					button.disabled = false;
@@ -419,10 +430,14 @@ export class ReWriteModal extends Modal {
 		return { kind: 'audio', audio: result.blob, durationMs: result.durationMs };
 	}
 
-	private startTimerLoop(timerEl: HTMLElement): void {
+	private startTimerLoop(timerEl: HTMLElement, warningEl: HTMLElement): void {
 		this.timerHandle = window.setInterval(() => {
-			const ms = this.recorder?.getElapsedMs() ?? 0;
+			const recorder = this.recorder;
+			const ms = recorder?.getElapsedMs() ?? 0;
 			timerEl.setText(formatDuration(ms));
+			const silent = (recorder?.getSilentMs() ?? 0) > SILENCE_WARNING_MS;
+			if (silent) warningEl.show();
+			else warningEl.hide();
 		}, 250);
 	}
 

@@ -22,6 +22,12 @@ const MP4_FIRST: string[] = [
 	'audio/ogg;codecs=opus',
 ];
 
+// Peak amplitude (0..1, deviation from silence) below which a sample counts as silence.
+// Mute / a dead mic sits near 0; even quiet speech clears this comfortably.
+const SILENCE_LEVEL_THRESHOLD = 0.015;
+// How often the level monitor samples the analyser while recording.
+const LEVEL_SAMPLE_INTERVAL_MS = 100;
+
 export function getBestMimeType(preference: RecordingFormatPreference): string {
 	if (typeof MediaRecorder === 'undefined') return '';
 	const candidates = preference === 'mp4' ? MP4_FIRST : WEBM_FIRST;
@@ -40,6 +46,16 @@ export class Recorder {
 	private accumulatedMs = 0;
 	private mimeType = '';
 
+	// Live input-level monitoring (so the UI can warn about a muted / dead mic).
+	private audioContext: AudioContext | null = null;
+	private analyser: AnalyserNode | null = null;
+	private sourceNode: MediaStreamAudioSourceNode | null = null;
+	private levelData: Uint8Array | null = null;
+	private levelTimer: number | null = null;
+	private currentLevel = 0;
+	private lastSoundAt = 0;
+	private soundDetected = false;
+
 	getState(): RecorderState {
 		return this.state;
 	}
@@ -49,6 +65,26 @@ export class Recorder {
 			return this.accumulatedMs + (Date.now() - this.startedAt);
 		}
 		return this.accumulatedMs;
+	}
+
+	/** Most recent input level, 0..1 (peak deviation from silence). */
+	getInputLevel(): number {
+		return this.currentLevel;
+	}
+
+	/** Whether any audio above the silence threshold has been heard since recording began. */
+	hasDetectedSound(): boolean {
+		return this.soundDetected;
+	}
+
+	/**
+	 * Milliseconds of continuous silence up to now. Returns 0 while paused / not
+	 * recording (so the UI does not warn when there is nothing to listen to) and
+	 * when the level monitor could not be created.
+	 */
+	getSilentMs(): number {
+		if (this.state !== 'recording' || !this.analyser) return 0;
+		return Date.now() - this.lastSoundAt;
 	}
 
 	async start(preference: RecordingFormatPreference): Promise<void> {
@@ -81,6 +117,7 @@ export class Recorder {
 		this.startedAt = Date.now();
 		this.accumulatedMs = 0;
 		this.state = 'recording';
+		this.startLevelMonitor(stream);
 		recorder.start();
 	}
 
@@ -101,6 +138,8 @@ export class Recorder {
 		if (!this.mediaRecorder) throw new Error('Recorder.resume: missing MediaRecorder');
 		this.mediaRecorder.resume();
 		this.startedAt = Date.now();
+		// Don't count the paused gap as silence.
+		this.lastSoundAt = Date.now();
 		this.state = 'recording';
 	}
 
@@ -143,9 +182,70 @@ export class Recorder {
 	}
 
 	private releaseStream(): void {
+		this.stopLevelMonitor();
 		if (this.stream) {
 			for (const track of this.stream.getTracks()) track.stop();
 			this.stream = null;
 		}
+	}
+
+	private startLevelMonitor(stream: MediaStream): void {
+		this.currentLevel = 0;
+		this.soundDetected = false;
+		this.lastSoundAt = Date.now();
+		const Ctx = window.AudioContext
+			?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+		if (!Ctx) return; // No Web Audio: silence detection is simply unavailable.
+		try {
+			const ctx = new Ctx();
+			const source = ctx.createMediaStreamSource(stream);
+			const analyser = ctx.createAnalyser();
+			analyser.fftSize = 1024;
+			source.connect(analyser); // Not connected to destination, so no monitoring feedback.
+			this.audioContext = ctx;
+			this.sourceNode = source;
+			this.analyser = analyser;
+			this.levelData = new Uint8Array(analyser.fftSize);
+			this.levelTimer = window.setInterval(() => this.sampleLevel(), LEVEL_SAMPLE_INTERVAL_MS);
+		} catch {
+			// Treat any setup failure as "monitoring unavailable" rather than failing the recording.
+			this.teardownLevelNodes();
+		}
+	}
+
+	private sampleLevel(): void {
+		if (this.state !== 'recording' || !this.analyser || !this.levelData) return;
+		this.analyser.getByteTimeDomainData(this.levelData);
+		let peak = 0;
+		for (let i = 0; i < this.levelData.length; i++) {
+			const deviation = Math.abs((this.levelData[i] ?? 128) - 128);
+			if (deviation > peak) peak = deviation;
+		}
+		this.currentLevel = peak / 128;
+		if (this.currentLevel >= SILENCE_LEVEL_THRESHOLD) {
+			this.lastSoundAt = Date.now();
+			this.soundDetected = true;
+		}
+	}
+
+	private stopLevelMonitor(): void {
+		if (this.levelTimer !== null) {
+			window.clearInterval(this.levelTimer);
+			this.levelTimer = null;
+		}
+		this.teardownLevelNodes();
+		this.currentLevel = 0;
+	}
+
+	private teardownLevelNodes(): void {
+		try { this.sourceNode?.disconnect(); } catch { /* best effort */ }
+		try { this.analyser?.disconnect(); } catch { /* best effort */ }
+		if (this.audioContext) {
+			void this.audioContext.close().catch(() => { /* best effort */ });
+		}
+		this.sourceNode = null;
+		this.analyser = null;
+		this.audioContext = null;
+		this.levelData = null;
 	}
 }

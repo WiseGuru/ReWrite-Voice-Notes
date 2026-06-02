@@ -13,6 +13,10 @@ export interface TranscriptionProvider {
 		audio: Blob,
 		config: TranscriptionConfig,
 		signal?: AbortSignal,
+		// Recorded audio length, when known. Used only by the async polling
+		// adapters (AssemblyAI, Rev.ai) to size their poll timeout; ignored by the
+		// rest. Undefined for reprocess flows that don't measure the file.
+		durationMs?: number,
 	): Promise<string>;
 	listModels?(config: TranscriptionConfig, signal?: AbortSignal): Promise<string[]>;
 }

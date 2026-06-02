@@ -1,8 +1,8 @@
 import { TranscriptionConfig } from '../types';
 import { jsonGet, jsonPost, providerRequest, sleep } from '../http';
 import { TranscriptionProvider } from './index';
+import { pollTimeoutMs } from './limits';
 
-const POLL_TIMEOUT_MS = 60_000;
 const INITIAL_DELAY_MS = 1000;
 const MAX_DELAY_MS = 8000;
 
@@ -34,6 +34,7 @@ export function createAssemblyAITranscription(): TranscriptionProvider {
 			audio: Blob,
 			config: TranscriptionConfig,
 			signal?: AbortSignal,
+			durationMs?: number,
 		): Promise<string> {
 			if (!config.apiKey) throw new Error('assemblyai: API key is not configured');
 			const authHeaders = { Authorization: config.apiKey };
@@ -67,7 +68,7 @@ export function createAssemblyAITranscription(): TranscriptionProvider {
 				throw new Error('assemblyai: transcript request missing id');
 			}
 
-			return pollAssemblyAI(created.id, authHeaders, !!config.diarize, signal);
+			return pollAssemblyAI(created.id, authHeaders, !!config.diarize, pollTimeoutMs(durationMs), signal);
 		},
 	};
 }
@@ -83,14 +84,15 @@ async function pollAssemblyAI(
 	id: string,
 	headers: Record<string, string>,
 	diarize: boolean,
+	timeoutMs: number,
 	signal: AbortSignal | undefined,
 ): Promise<string> {
 	const start = Date.now();
 	let delay = INITIAL_DELAY_MS;
 	for (;;) {
 		const elapsed = Date.now() - start;
-		if (elapsed > POLL_TIMEOUT_MS) {
-			throw new Error(`assemblyai: poll timeout after ${POLL_TIMEOUT_MS / 1000}s`);
+		if (elapsed > timeoutMs) {
+			throw new Error(`assemblyai: poll timeout after ${Math.round(timeoutMs / 1000)}s`);
 		}
 		const status = await jsonGet<TranscriptStatusResponse>(
 			'assemblyai',

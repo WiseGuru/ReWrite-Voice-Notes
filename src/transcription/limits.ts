@@ -54,6 +54,21 @@ export function transcriptionProviderLabel(id: TranscriptionProviderID): string 
 	}
 }
 
+// Poll budget for async transcription providers (AssemblyAI, Rev.ai). A fixed
+// short timeout makes long recordings fail before the server finishes; a fixed
+// long one makes a stuck short clip hang for minutes. Scale with the audio
+// duration instead: ~2x real-time over a 1 min base, clamped so a short clip
+// with a problem fails fast and the longest advertised jobs still have room.
+// Unknown duration (reprocess of an arbitrary vault file, where we don't measure
+// length) falls back to the ceiling.
+const POLL_FLOOR_MS = 60 * 1000; // 1 min: short clips + network slop
+const POLL_CEILING_MS = 2 * HOUR; // covers the longest realistic provider jobs
+
+export function pollTimeoutMs(durationMs?: number): number {
+	if (!durationMs || durationMs <= 0) return POLL_CEILING_MS;
+	return Math.min(POLL_FLOOR_MS + durationMs * 2, POLL_CEILING_MS);
+}
+
 export function validateRecording(
 	blobSize: number,
 	durationMs: number | undefined,

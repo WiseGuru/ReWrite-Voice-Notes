@@ -23,6 +23,33 @@ You bring your own provider keys. Nothing is sent to a ReWrite server; the plugi
 - **Known nouns**: a vault Markdown file of proper nouns (with optional misheard variants) that the LLM preserves verbatim, fixing names the transcriber tends to mangle.
 - **API key encryption**: keys are stored per device in the verified OS keychain (desktop) or with a strength-checked passphrase using Argon2id/PBKDF2 AES-GCM (cross-platform). There is no unencrypted option.
 
+## Tested providers
+
+ReWrite ships adapters for every provider listed below, but only some have been exercised end to end so far. "Tested" means a maintainer has run the full record/transcribe/cleanup/insert flow against that service. "Untested" means the adapter is implemented to the provider's documented API shape but has not yet been verified against a live account. Untested does not mean broken; it means unverified, so treat reports of issues there as expected and welcome.
+
+### Transcription
+
+| Provider | Status |
+| --- | --- |
+| Local whisper.cpp (plugin-managed) | ✅ Tested |
+| Mistral Voxtral | ✅ Tested |
+| AssemblyAI | ✅ Tested |
+| OpenAI Whisper | Untested |
+| OpenAI-compatible (whisper.cpp, faster-whisper-server) | Untested |
+| Groq | Untested |
+| Deepgram | Untested |
+| Rev.ai | Untested |
+
+### LLM (cleanup)
+
+| Provider | Status |
+| --- | --- |
+| Anthropic Claude | ✅ Tested |
+| Mistral | ✅ Tested |
+| OpenAI-compatible (Ollama, LM Studio) | ✅ Tested (local Ollama) |
+| OpenAI GPT | Untested |
+| Google Gemini | Untested |
+
 ## Install
 
 ### Manual install (current method)

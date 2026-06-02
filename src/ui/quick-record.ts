@@ -7,6 +7,10 @@ import { NoteTemplate } from '../types';
 import { isProfileConfigured } from './setup-card';
 import { ReWriteModal } from './modal';
 
+// Continuous silence (ms) before the Quick Record floater warns about a muted / dead mic.
+const SILENCE_WARNING_MS = 3000;
+const SILENCE_WARNING_TEXT = 'No audio detected. Check that your microphone is on and not muted.';
+
 export class QuickRecordController {
 	private recorder: Recorder | null = null;
 	private timerHandle: number | null = null;
@@ -43,6 +47,8 @@ export class QuickRecordController {
 		this.timerHandle = window.setInterval(() => {
 			const ms = this.recorder?.getElapsedMs() ?? 0;
 			this.floater?.setTime(formatDuration(ms));
+			const silent = (this.recorder?.getSilentMs() ?? 0) > SILENCE_WARNING_MS;
+			this.floater?.setSilenceWarning(silent);
 		}, 250);
 	}
 
@@ -211,6 +217,7 @@ interface QuickRecordFloaterOptions {
 class QuickRecordFloater {
 	private readonly el: HTMLElement;
 	private readonly timerEl: HTMLElement;
+	private readonly warningEl: HTMLElement;
 	private readonly templateBtn: HTMLButtonElement;
 	private readonly templateLabel: HTMLElement;
 	private popover: HTMLElement | null = null;
@@ -220,11 +227,12 @@ class QuickRecordFloater {
 
 	constructor(private readonly options: QuickRecordFloaterOptions) {
 		this.el = document.body.createDiv({ cls: 'rewrite-quick-floater' });
-		this.el.createSpan({ cls: 'rewrite-quick-dot' });
-		this.el.createSpan({ cls: 'rewrite-quick-label', text: 'Recording' });
-		this.timerEl = this.el.createSpan({ cls: 'rewrite-quick-timer', text: '0:00' });
+		const row = this.el.createDiv({ cls: 'rewrite-quick-row' });
+		row.createSpan({ cls: 'rewrite-quick-dot' });
+		row.createSpan({ cls: 'rewrite-quick-label', text: 'Recording' });
+		this.timerEl = row.createSpan({ cls: 'rewrite-quick-timer', text: '0:00' });
 
-		this.templateBtn = this.el.createEl('button', {
+		this.templateBtn = row.createEl('button', {
 			cls: 'rewrite-quick-template',
 		});
 		this.templateLabel = this.templateBtn.createSpan({
@@ -239,13 +247,13 @@ class QuickRecordFloater {
 		});
 
 		if (options.stopHotkey) {
-			this.el.createSpan({
+			row.createSpan({
 				cls: 'rewrite-quick-stop-hint',
 				text: `Press ${options.stopHotkey} or`,
 			});
 		}
 
-		const stopBtn = this.el.createEl('button', {
+		const stopBtn = row.createEl('button', {
 			text: 'Stop',
 			cls: 'mod-cta rewrite-quick-stop',
 		});
@@ -253,7 +261,7 @@ class QuickRecordFloater {
 			if (this.busy) return;
 			options.onStop();
 		});
-		const cancelBtn = this.el.createEl('button', {
+		const cancelBtn = row.createEl('button', {
 			text: 'Cancel',
 			cls: 'rewrite-quick-cancel',
 		});
@@ -261,6 +269,20 @@ class QuickRecordFloater {
 			if (this.busy) return;
 			options.onCancel();
 		});
+
+		this.warningEl = this.el.createDiv({
+			cls: 'rewrite-quick-silence-warning',
+			text: SILENCE_WARNING_TEXT,
+		});
+		this.warningEl.hide();
+	}
+
+	setSilenceWarning(show: boolean): void {
+		if (this.busy || show === false) {
+			this.warningEl.hide();
+			return;
+		}
+		this.warningEl.show();
 	}
 
 	setTime(label: string): void {
@@ -272,6 +294,7 @@ class QuickRecordFloater {
 		this.el.addClass('is-busy');
 		this.timerEl.setText(label);
 		this.templateBtn.disabled = true;
+		this.warningEl.hide();
 		this.closePopover();
 	}
 

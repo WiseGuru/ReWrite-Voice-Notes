@@ -104,7 +104,7 @@ async function collectTranscript(params: PipelineParams): Promise<string> {
 				&& transcriptionProviderSupportsDiarization(params.profile.transcriptionProvider)
 				? { ...params.profile.transcriptionConfig, diarize: true }
 				: params.profile.transcriptionConfig;
-			return provider.transcribe(source.audio, config, params.signal);
+			return provider.transcribe(source.audio, config, params.signal, source.durationMs);
 		}
 	}
 }

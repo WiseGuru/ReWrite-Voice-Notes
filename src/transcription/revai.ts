@@ -1,8 +1,8 @@
 import { TranscriptionConfig } from '../types';
 import { jsonGet, MultipartPart, multipartPost, providerRequest, sleep } from '../http';
 import { audioFilename, TranscriptionProvider } from './index';
+import { pollTimeoutMs } from './limits';
 
-const POLL_TIMEOUT_MS = 60_000;
 const INITIAL_DELAY_MS = 1000;
 const MAX_DELAY_MS = 8000;
 
@@ -37,6 +37,7 @@ export function createRevAITranscription(): TranscriptionProvider {
 			audio: Blob,
 			config: TranscriptionConfig,
 			signal?: AbortSignal,
+			durationMs?: number,
 		): Promise<string> {
 			if (!config.apiKey) throw new Error('revai: API key is not configured');
 			const authHeaders = { Authorization: `Bearer ${config.apiKey}` };
@@ -69,7 +70,7 @@ export function createRevAITranscription(): TranscriptionProvider {
 				throw new Error('revai: submit response missing id');
 			}
 
-			await pollRevAI(created.id, authHeaders, signal);
+			await pollRevAI(created.id, authHeaders, pollTimeoutMs(durationMs), signal);
 
 			// Rev.ai diarizes by default. The plain-text transcript flattens that
 			// away, so when diarization is requested we fetch the JSON transcript
@@ -115,14 +116,15 @@ function formatMonologues(json: RevAiTranscriptJson): string {
 async function pollRevAI(
 	id: string,
 	headers: Record<string, string>,
+	timeoutMs: number,
 	signal: AbortSignal | undefined,
 ): Promise<void> {
 	const start = Date.now();
 	let delay = INITIAL_DELAY_MS;
 	for (;;) {
 		const elapsed = Date.now() - start;
-		if (elapsed > POLL_TIMEOUT_MS) {
-			throw new Error(`revai: poll timeout after ${POLL_TIMEOUT_MS / 1000}s`);
+		if (elapsed > timeoutMs) {
+			throw new Error(`revai: poll timeout after ${Math.round(timeoutMs / 1000)}s`);
 		}
 		const status = await jsonGet<JobStatusResponse>(
 			'revai',
