@@ -10,7 +10,7 @@ const DEFAULT_TEMPLATES: NoteTemplate[] = [
 		id: 'tpl-default-general-cleanup',
 		name: 'General cleanup',
 		prompt:
-			`Produce natural-sounding written prose that preserves the speaker's meaning, structure, and approximate length.
+			`Produce natural-sounding written prose that preserves the speaker's meaning, structure, and full length. This is a cleanup pass, NOT a summary: every distinct point, step, example, caveat, number, and named detail in the input must survive in the output. You are removing disfluencies and redundancy, never information. If the input is long, the output should be comparably long.
 
 Detailed rules:
 - Remove "like" used as a filler or hedge ("is like a tool that"). Keep "like" when it means "similar to" or is a verb.
@@ -85,7 +85,7 @@ Goals, Tasks, and Calendar are extracted from what the speaker actually said in 
 		id: 'tpl-default-idea-capture',
 		name: 'Idea capture',
 		prompt:
-			`Preserve the raw ideas faithfully: do not summarize, abridge, reorder, or invent connections between them. Prepend a single one-sentence summary of the core idea at the very top, followed by a blank line, then the cleaned ideas.`,
+			`Capture every distinct idea and its supporting details faithfully: do not summarize, abridge, merge, reorder, or invent connections between them. Keep all specifics (names, numbers, examples, steps, and caveats) exactly as expressed, in the order the speaker presented them. The result is a complete, lightly cleaned record of everything said, not a digest. Prepend a single one-sentence summary of the core idea at the very top, followed by a blank line, then the cleaned ideas.`,
 		insertMode: 'append',
 		newFileFolder: '',
 		newFileNameTemplate: 'Idea {{date}} {{time}}',
@@ -108,6 +108,65 @@ Goals, Tasks, and Calendar are extracted from what the speaker actually said in 
 		insertMode: 'newFile',
 		newFileFolder: 'Podcasts',
 		newFileNameTemplate: 'Podcast {{date}} {{time}}',
+		enableContextHint: true,
+	},
+	{
+		id: 'tpl-default-guides',
+		name: 'Guides',
+		prompt:
+			`You convert transcribed spoken walkthroughs into clean, sequential documentation steps. The input is a raw transcript of someone narrating how to use an application or tool while they demonstrate it. Your output is documentation-ready instructions a writer can paste with minimal editing.
+
+RULES
+
+Fidelity over completeness. Use only what the transcript states. Never invent UI labels, menu paths, button names, keyboard shortcuts, or steps that were not described. If a step is clearly implied but its specifics are missing, insert a bracketed placeholder like [unspecified: exact menu name] rather than guessing.
+
+Preserve literal values exactly. Commands, filenames, URLs, code, and any text the speaker says to type or enter must be reproduced verbatim, not paraphrased. If the speaker spells a command out in words, render the literal token only when unambiguous; otherwise flag it in the Gaps section.
+
+Reorder into logical sequence. Speakers backtrack and self-correct ("actually, before that..."). Resolve these into the correct final order and drop the false starts. If a correction revises an earlier step, apply it and keep only the corrected version.
+
+Strip speech artifacts. Remove filler (um, uh, like, you know, basically, so), restarts, and asides with no instructional content. Do NOT remove substantive caveats, warnings, or conditions.
+
+Convert to imperative voice. "So I'm going to click Save" becomes "Click Save." Address the reader as the one performing the action.
+
+Separate actions from explanation. Each step is one discrete action. Put rationale, warnings, and "why" context in a Note beneath the relevant step, not inside the step text.
+
+Handle ambiguous references. Walkthroughs lean on what's on screen ("click here," "this one"). When the referent is recoverable from surrounding context, name it. When it is not, keep the action but mark the target: "Click [target unclear from transcript]."
+
+Preserve branches and conditions. If the speaker gives alternatives ("if you're on Mac, instead..."), keep them as labeled conditional steps, not merged into one.
+
+OUTPUT FORMAT
+
+Output valid Obsidian-flavored Markdown only, structured so it renders cleanly with no literal list markers showing as plain text.
+
+- Begin with a Markdown H1 title naming the task (e.g. "# SSO and SCIM setup").
+- End with a "## Gaps" H2 section: a bulleted list of everything ambiguous, missing, spelled-out, or assumed, so the writer knows exactly what to verify.
+- Put caveats and rationale on their own line as "**Note:** ..." (bold label), indented to match the content they belong to.
+
+LIST FORMATTING (follow exactly)
+
+- Use at most TWO levels: top-level steps, and one level of sub-steps beneath a step. Never nest a third level. If content seems to need a third level, flatten it: promote it to its own top-level step, or fold it into the parent line.
+- Top-level steps: an ordered list, one action per line, marked "1.", "2.", "3.", ... each starting at the left margin with no indentation.
+- Sub-steps: a bulleted list marked with "-", each line indented by exactly ONE TAB character (never spaces) beneath its parent step.
+- One marker style per level, never switched: the top level is always "1." numbers, sub-steps are always "-" bullets. Do NOT use lettered ("a.", "b.") or roman-numeral ("i.", "ii.") markers, and do NOT use "*" for bullets.
+- Do not continue the top-level numbering into sub-steps. Sub-steps are bullets, so they carry no number at all.
+- A step with no sub-actions is just a single numbered line with no nested list beneath it.
+- Caveats and rationale go on their own line as "**Note:** ..." (bold label, no list marker), indented one TAB to sit under the step or sub-step they belong to.
+
+Match this shape exactly (there is exactly one tab before each sub-step bullet):
+
+1. Create the organization in WorkOS.
+	- Log into WorkOS and open the Organizations tab.
+	- Search by name or domain to confirm it does not already exist.
+	- Click Create Organization, then enter the name and domain from the request.
+2. Invite the admin to the organization.
+	- Click Invite Contact and copy the setup link.
+	- Paste the link into the Slack thread.
+	- **Note:** For SCIM, also check Directory Sync, not just Single Sign On.
+
+Do not add an introduction, summary, or closing remarks unless the transcript contains them.`,
+		insertMode: 'newFile',
+		newFileFolder: 'Guides',
+		newFileNameTemplate: 'Guide {{date}} {{time}}',
 		enableContextHint: true,
 	},
 ];

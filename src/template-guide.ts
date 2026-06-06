@@ -25,7 +25,7 @@ Each template is a single \`.md\` file in your templates folder (default \`ReWri
 
 Templates are listed in the picker sorted by file name, so prefix names with numbers (\`01 General.md\`, \`02 Daily note.md\`) if you want a specific order. Identity comes from the \`id\` property, not the file name, so you can rename a file without breaking which template is your default or last used.
 
-The **Populate** button in settings writes the eight built-in templates here. It is non-destructive: it skips any template whose \`id\` already exists, so you can run it again to top up after deleting one, and your own edits are never overwritten.
+The **Populate** button in settings writes the nine built-in templates here. It is non-destructive: it skips any template whose \`id\` already exists, so you can run it again to top up after deleting one, and your own edits are never overwritten.
 
 ## Frontmatter properties
 
@@ -76,7 +76,7 @@ Editing \`SharedCore.md\` changes the baseline for every template at once. It ri
 
 Set \`enableContextHint: true\` on a template to surface an optional **Context** field whenever you use it. It is collapsed by default in both the main ReWrite window and the "Reprocess audio" picker, so it never gets in your way; expand it only when you want to add a one-off note about the recording, such as "Lecture by Dr. Smith on thermodynamics" or "Meeting with Rachel, Joe, and Sally".
 
-Whatever you type is added to the prompt as a \`## Context\` block for that single run (it is not saved). It helps the model attribute statements to the right person, spell names correctly, and pick the right tone. It is the one-off counterpart to your Known nouns list: Known nouns is a standing list of names to always preserve, while Context is "here is what *this* recording is". The built-in Meeting notes, Meeting transcript, Lecture, and Podcast templates ship with this turned on.
+Whatever you type is added to the prompt as a \`## Context\` block for that single run (it is not saved). It helps the model attribute statements to the right person, spell names correctly, and pick the right tone. It is the one-off counterpart to your Known nouns list: Known nouns is a standing list of names to always preserve, while Context is "here is what *this* recording is". The built-in Meeting notes, Meeting transcript, Lecture, Podcast, and Guides templates ship with this turned on.
 
 ## Speaker identification
 
