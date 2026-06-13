@@ -15,7 +15,7 @@ import { detectActiveProfileKind } from '../platform';
 import { createTranscriptionProvider, transcriptionProviderSupportsDiarization } from '../transcription';
 import { createLLMProvider } from '../llm';
 import { formatWhisperStatus } from '../whisper-host';
-import { populateDefaultTemplates } from '../templates-folder';
+import { loadPriorTemplateVersions, populateDefaultTemplates, updateDefaultTemplates } from '../templates-folder';
 import { populateDefaultSharedCore } from '../shared-core';
 import { populateTemplateGuide } from '../template-guide';
 import { populateDefaultAssistantPrompt } from '../assistant-prompt';
@@ -834,8 +834,8 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(parent)
-			.setName('Populate with default templates')
-			.setDesc('Writes the eight built-in templates into the folder above, plus the shared core file and a template guide if they are missing. It skips any template that already exists, so you can run it again to top up after deleting one.')
+			.setName('Populate or update default templates')
+			.setDesc('Populate writes the built-in templates, shared core, and guide if they are missing, skipping anything that already exists. Update reconciles your built-in-derived templates with the current defaults: it fills in new fields and properties, brings unedited prompts forward, restores any you deleted, keeps your edits, and writes a report for anything it cannot safely merge. Load prior versions drops earlier shipped versions of the prompts in as separate templates so you can compare them.')
 			.addButton((b) => {
 				b.setButtonText('Populate').setCta().onClick(() => void this.runGuardedButton(b, async () => {
 					try {
@@ -855,6 +855,43 @@ export class ReWriteSettingTab extends PluginSettingTab {
 					} catch (e) {
 						console.error('ReWrite: populate templates failed', e);
 						new Notice(`ReWrite: populate failed. ${e instanceof Error ? e.message : String(e)}`);
+					}
+				}));
+			})
+			.addButton((b) => {
+				b.setButtonText('Update').onClick(() => void this.runGuardedButton(b, async () => {
+					try {
+						const result = await updateDefaultTemplates(this.app, s.templatesFolderPath);
+						await this.plugin.refreshTemplates();
+						const reviewNote = result.conflicts > 0
+							? ` ${result.conflicts} need review.`
+							: '';
+						const failNote = result.parseFailed > 0
+							? ` ${result.parseFailed} unparseable, skipped.`
+							: '';
+						const reportNote = result.reportPath ? ` See ${result.reportPath}.` : '';
+						new Notice(`ReWrite: updated templates in ${result.folder}. ${result.updated} updated, ${result.created} created, ${result.unchanged} unchanged.${reviewNote}${failNote}${reportNote}`);
+						this.display();
+					} catch (e) {
+						console.error('ReWrite: update templates failed', e);
+						new Notice(`ReWrite: update failed. ${e instanceof Error ? e.message : String(e)}`);
+					}
+				}));
+			})
+			.addButton((b) => {
+				b.setButtonText('Load prior versions').onClick(() => void this.runGuardedButton(b, async () => {
+					try {
+						const result = await loadPriorTemplateVersions(this.app, s.templatesFolderPath);
+						await this.plugin.refreshTemplates();
+						if (result.available === 0) {
+							new Notice('ReWrite: no prior template versions are available yet.');
+						} else {
+							new Notice(`ReWrite: loaded prior versions into ${result.folder}. Created ${result.created}, skipped ${result.skipped}.`);
+						}
+						this.display();
+					} catch (e) {
+						console.error('ReWrite: load prior versions failed', e);
+						new Notice(`ReWrite: load prior versions failed. ${e instanceof Error ? e.message : String(e)}`);
 					}
 				}));
 			});

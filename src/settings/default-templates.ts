@@ -67,8 +67,14 @@ Goals, Tasks, and Calendar are extracted from what the speaker actually said in 
 			`Restructure the transcript into meeting notes using these "##" sections, omitting any the transcript doesn't cover: Attendees, Summary, Action items, Decisions. Format Action items as a Markdown checkbox list ("- [ ] "), including the owner when one was stated. Keep Summary to 2-4 sentences. Do not invent attendees, actions, or decisions.`,
 		insertMode: 'newFile',
 		newFileFolder: 'Meetings',
-		newFileNameTemplate: 'Meeting {{date}} {{time}}',
+		newFileNameTemplate: 'Meeting {{date}} {{title}}',
 		enableContextHint: true,
+		titleFromContent: true,
+		noteProperties: [
+			{ name: 'subject', instruction: 'A short subject line for the meeting.' },
+			{ name: 'participants', instruction: 'Comma-separated list of attendees, or leave blank if none are named.' },
+			{ name: 'date', instruction: 'The meeting date (e.g. 2026-06-12), or leave blank if not stated.' },
+		],
 	},
 	{
 		id: 'tpl-default-meeting-transcript',
@@ -77,9 +83,15 @@ Goals, Tasks, and Calendar are extracted from what the speaker actually said in 
 			`Restructure the transcript into meeting notes using these "##" sections, omitting any the transcript doesn't cover: Attendees, Summary, Action items, Decisions. The transcript includes "Speaker X:" labels; use them to populate Attendees and to attribute action items and decisions to the right person, replacing the generic labels with real names when the context makes them clear. Format Action items as a Markdown checkbox list ("- [ ] "), naming the owner when one is identifiable. Keep Summary to 2-4 sentences. Do not invent attendees, actions, or decisions.`,
 		insertMode: 'newFile',
 		newFileFolder: 'Meetings',
-		newFileNameTemplate: 'Meeting {{date}} {{time}}',
+		newFileNameTemplate: 'Meeting {{date}} {{title}}',
 		enableContextHint: true,
 		diarize: true,
+		titleFromContent: true,
+		noteProperties: [
+			{ name: 'subject', instruction: 'A short subject line for the meeting.' },
+			{ name: 'participants', instruction: 'Comma-separated list of attendees, using real names where the speaker labels make them identifiable; leave blank if none.' },
+			{ name: 'date', instruction: 'The meeting date (e.g. 2026-06-12), or leave blank if not stated.' },
+		],
 	},
 	{
 		id: 'tpl-default-idea-capture',
@@ -97,8 +109,14 @@ Goals, Tasks, and Calendar are extracted from what the speaker actually said in 
 			`Restructure this single-speaker transcript into structured notes using these "##" sections, omitting any the transcript does not cover: Summary, Key concepts, Definitions, Examples, Open questions, References. Keep Summary to 2-4 sentences capturing the lecture's thesis. Under Key concepts, list each major idea as a bullet with one or two sentences of explanation. Capture Definitions as "term: definition" bullets. Do not invent material the speaker did not say.`,
 		insertMode: 'newFile',
 		newFileFolder: 'Lectures',
-		newFileNameTemplate: 'Lecture {{date}} {{time}}',
+		newFileNameTemplate: 'Lecture {{date}} {{title}}',
 		enableContextHint: true,
+		titleFromContent: true,
+		noteProperties: [
+			{ name: 'subject', instruction: "The lecture's topic or title." },
+			{ name: 'lecturer', instruction: "The speaker's name, if stated; otherwise leave blank." },
+			{ name: 'course', instruction: 'The course or series this lecture belongs to, if mentioned.' },
+		],
 	},
 	{
 		id: 'tpl-default-podcast',
@@ -107,8 +125,15 @@ Goals, Tasks, and Calendar are extracted from what the speaker actually said in 
 			`Restructure the transcript into structured notes using these "##" sections, omitting any the transcript does not cover: Summary, Speakers, Topics discussed, Notable quotes, References mentioned, Takeaways. Keep Summary to 2-4 sentences. Under Speakers, list each distinct voice and what they bring (host, guest, role) when stated. Format Notable quotes as 'Speaker: "quote"' lines when the transcript includes speaker labels; when it does not, attribute generically ("one speaker noted that..."). Capture References as books, papers, people, or URLs a listener might follow up on. Do not invent speakers, attributions, or references.`,
 		insertMode: 'newFile',
 		newFileFolder: 'Podcasts',
-		newFileNameTemplate: 'Podcast {{date}} {{time}}',
+		newFileNameTemplate: '{{title}}',
 		enableContextHint: true,
+		titleFromContent: true,
+		noteProperties: [
+			{ name: 'podcast', instruction: 'The name of the podcast.' },
+			{ name: 'episode', instruction: 'The episode title or number, if mentioned.' },
+			{ name: 'host', instruction: "The host's name, if stated; otherwise leave blank." },
+			{ name: 'guests', instruction: 'Comma-separated list of guests or interviewees, or leave blank if none.' },
+		],
 	},
 	{
 		id: 'tpl-default-guides',
@@ -166,8 +191,29 @@ Match this shape exactly (there is exactly one tab before each sub-step bullet):
 Do not add an introduction, summary, or closing remarks unless the transcript contains them.`,
 		insertMode: 'newFile',
 		newFileFolder: 'Guides',
-		newFileNameTemplate: 'Guide {{date}} {{time}}',
+		newFileNameTemplate: '{{title}}',
 		enableContextHint: true,
+		titleFromContent: true,
+		noteProperties: [
+			{ name: 'topic', instruction: 'A short title describing what the guide accomplishes.' },
+			{ name: 'tool', instruction: 'The application or tool the guide covers, if named.' },
+		],
+	},
+	{
+		id: 'tpl-default-book-log',
+		name: 'Book log',
+		prompt:
+			`Turn the spoken notes into a concise book-log entry. Use these "##" sections, omitting any the transcript does not cover: Summary, Thoughts, Key takeaways, Favorite quotes. Keep Summary to 2-4 sentences describing what the book is about. Capture Thoughts as the speaker's reactions and opinions in lightly cleaned prose. Format Key takeaways as bullets. If the speaker gave a rating, note it at the top as "Rating: ...". Do not invent plot points, opinions, or quotes the speaker did not state.`,
+		insertMode: 'newFile',
+		newFileFolder: 'Books',
+		newFileNameTemplate: '{{title}}',
+		enableContextHint: true,
+		titleFromContent: true,
+		noteProperties: [
+			{ name: 'title', instruction: 'The book title.' },
+			{ name: 'author', instruction: "The author's full name." },
+			{ name: 'series', instruction: 'The series name, or leave blank if standalone.' },
+		],
 	},
 ];
 

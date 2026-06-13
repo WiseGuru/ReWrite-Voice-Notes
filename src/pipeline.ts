@@ -1,5 +1,5 @@
-import { App, Notice } from 'obsidian';
-import { DestinationOverride, EnvironmentProfile, GlobalSettings, NoteTemplate, PipelineHost } from './types';
+import { App, Notice, parseYaml } from 'obsidian';
+import { DestinationOverride, EnvironmentProfile, GlobalSettings, NotePropertySpec, NoteTemplate, PipelineHost } from './types';
 import { createTranscriptionProvider, transcriptionProviderSupportsDiarization } from './transcription';
 import { validateRecording } from './transcription/limits';
 import { createLLMProvider } from './llm';
@@ -8,6 +8,11 @@ import { persistAudio } from './audio-persist';
 import { extractAdHocInstructions } from './wake-name';
 import { DEFAULT_ASSISTANT_PROMPT } from './assistant-prompt';
 import { buildKnownNounsSystemPromptSection } from './known-nouns';
+
+// Reserved key the LLM uses (inside the leading yaml block) to return a generated
+// note title when a template sets `titleFromContent`. Filename-only: never written
+// to frontmatter, and excluded from the noteProperties `allowed` set.
+const RESERVED_TITLE_KEY = 'noteTitle';
 
 export type PipelineStage = 'persist-audio' | 'transcribe' | 'cleanup' | 'insert';
 
@@ -60,8 +65,8 @@ export async function runPipeline(params: PipelineParams): Promise<PipelineResul
 	}
 
 	params.onStage?.('cleanup');
-	const cleaned = await cleanupTranscript(params, transcript);
-	const finalContent = audioPath ? `![[${audioPath}]]\n\n${cleaned}` : cleaned;
+	const { body, properties, title } = await cleanupTranscript(params, transcript);
+	const finalContent = audioPath ? `![[${audioPath}]]\n\n${body}` : body;
 
 	params.onStage?.('insert');
 	const insert = await insertOutput({
@@ -69,6 +74,8 @@ export async function runPipeline(params: PipelineParams): Promise<PipelineResul
 		template: applyDestinationOverride(params.template, params.destinationOverride),
 		content: finalContent,
 		collisionMode: params.settings.newFileCollisionMode,
+		properties,
+		title,
 	});
 
 	return { transcript, cleaned: finalContent, insert };
@@ -109,12 +116,23 @@ async function collectTranscript(params: PipelineParams): Promise<string> {
 	}
 }
 
-async function cleanupTranscript(params: PipelineParams, transcript: string): Promise<string> {
+interface CleanupResult {
+	body: string;
+	// Frontmatter values keyed by declared property name (empty {} when the
+	// template declares no noteProperties or the LLM is disabled).
+	properties: Record<string, string>;
+	// Generated filename title from the reserved `noteTitle` key, set only when the
+	// template opted in via `titleFromContent`. undefined/'' otherwise. Filename-only;
+	// never written to frontmatter. Consumed by insertNewFile.
+	title?: string;
+}
+
+async function cleanupTranscript(params: PipelineParams, transcript: string): Promise<CleanupResult> {
 	// LLM=none: insert the transcript as-is. Skips wake-name extraction and
 	// known-nouns injection too, because both only matter when an LLM consumes
 	// the system prompt.
 	if (params.profile.llmProvider === 'none') {
-		return transcript;
+		return { body: transcript, properties: {} };
 	}
 	// Prepend the shared core preface (loaded from the vault SharedCore.md file)
 	// unless this template opted out via `disableSharedCore`. When no shared core
@@ -143,6 +161,121 @@ async function cleanupTranscript(params: PipelineParams, transcript: string): Pr
 		systemPrompt = `${systemPrompt}\n\n${knownNounsBlock}`;
 	}
 
+	const noteProps = params.template.noteProperties ?? [];
+	const allowedNames = new Set(noteProps.map((p) => p.name));
+	// A user property literally named `noteTitle` wins (it is written to frontmatter);
+	// in that rare case title-from-content is disabled so the key is not double-defined.
+	const wantsTitle = !!params.template.titleFromContent && !allowedNames.has(RESERVED_TITLE_KEY);
+	if (noteProps.length > 0 || wantsTitle) {
+		const propLines = noteProps
+			.map((p) => `- ${p.name}: ${p.instruction || '(fill from the content)'}`)
+			.join('\n');
+		const titleLine = wantsTitle
+			? `- ${RESERVED_TITLE_KEY}: A concise, descriptive title for this note, taken from the recording content and any provided context (e.g. the meeting's subject or the book's title). Plain text, no slashes or quotes, under ~80 characters.`
+			: '';
+		const lines = [propLines, titleLine].filter((l) => l.length > 0).join('\n');
+		const exampleKeys = [
+			...noteProps.map((p) => `${p.name}: `),
+			...(wantsTitle ? [`${RESERVED_TITLE_KEY}: `] : []),
+		].join('\n');
+		systemPrompt = `${systemPrompt}\n\n## Note properties\n`
+			+ 'Begin your reply with a single fenced code block tagged `yaml` holding exactly these keys, '
+			+ 'then a blank line, then the note body. This overrides the "no code fences" / "output only the '
+			+ 'note" rule above, but ONLY for this one leading block.\n\n'
+			+ `${lines}\n\n`
+			+ 'Format rules: write each value as plain unquoted text on the same line as its key '
+			+ '(e.g. `title: Bram Stoker\'s Dracula`). If a value is unknown, leave it blank (nothing after '
+			+ 'the colon) rather than guessing. Include every key exactly once, add no other keys, and do '
+			+ 'not wrap values in quotes. The block must be valid YAML. After the closing fence, leave a '
+			+ 'blank line, then output the note body exactly as instructed above.\n\n'
+			+ 'Shape (fill the values from the content; leave unknowns blank):\n'
+			+ '```yaml\n'
+			+ exampleKeys
+			+ '\n```';
+	}
+
 	const llm = createLLMProvider(params.profile.llmProvider);
-	return await llm.complete(systemPrompt, workingTranscript, params.profile.llmConfig, params.signal);
+	const raw = await llm.complete(systemPrompt, workingTranscript, params.profile.llmConfig, params.signal);
+	if (noteProps.length === 0 && !wantsTitle) return { body: raw, properties: {} };
+	return extractFromBlock(raw, noteProps, wantsTitle);
+}
+
+// Pull a single leading ```yaml block (the contract from the "## Note properties"
+// system-prompt section) off the LLM output. Returns the declared keys (seeded
+// empty, then overlaid with the model's values), the optional reserved `noteTitle`
+// (when `wantsTitle`, kept OUT of properties so it is never frontmatter), and the
+// remaining note body. When no block is present the whole output is the body. When a
+// block IS present it is always stripped from the body, even if its YAML is malformed
+// (the model emitted a properties block, not content); strict parse falls back to a
+// tolerant line-based read so a stray quote does not drop every value.
+function extractFromBlock(
+	raw: string,
+	specs: NotePropertySpec[],
+	wantsTitle: boolean,
+): CleanupResult {
+	const properties: Record<string, string> = {};
+	for (const spec of specs) properties[spec.name] = '';
+
+	const fence = /^\s*```(?:ya?ml)?\s*\n([\s\S]*?)\n```[ \t]*\n?/;
+	const match = raw.match(fence);
+	if (!match) return { body: raw.trim(), properties };
+
+	const block = match[1] ?? '';
+	const allowed = new Set(specs.map((s) => s.name));
+	let title = '';
+	let usedStrict = false;
+	try {
+		const parsed: unknown = parseYaml(block);
+		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+			usedStrict = true;
+			for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+				// Values are scalars. Take strings as-is, coerce numbers/booleans,
+				// and ignore null/undefined or nested objects/arrays.
+				let coerced: string | null = null;
+				if (typeof value === 'string') {
+					coerced = value;
+				} else if (typeof value === 'number' || typeof value === 'boolean') {
+					coerced = String(value);
+				}
+				if (coerced === null) continue;
+				if (wantsTitle && key === RESERVED_TITLE_KEY) {
+					title = coerced;
+				} else if (allowed.has(key)) {
+					properties[key] = coerced;
+				}
+			}
+		}
+	} catch {
+		// Fall through to the tolerant line parser below.
+	}
+	if (!usedStrict) {
+		// Tolerant fallback: read `key: value` lines directly and trim surrounding
+		// quotes, so a single malformed value does not blank the whole scaffold.
+		for (const line of block.split(/\r?\n/)) {
+			const m = /^\s*([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
+			if (!m) continue;
+			const key = m[1] ?? '';
+			const val = stripQuotes((m[2] ?? '').trim());
+			if (wantsTitle && key === RESERVED_TITLE_KEY) {
+				title = val;
+			} else if (allowed.has(key)) {
+				properties[key] = val;
+			}
+		}
+	}
+
+	const body = raw.slice(match[0].length).replace(/^\s+/, '');
+	return { body, properties, title: title || undefined };
+}
+
+function stripQuotes(value: string): string {
+	let v = value.trim();
+	// Peel matched leading/trailing quote pairs.
+	while (v.length >= 2
+		&& ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))) {
+		v = v.slice(1, -1).trim();
+	}
+	// Drop any remaining stray leading quotes (handles the model emitting an
+	// empty-string placeholder before the real value, e.g. `""Dracula"`).
+	return v.replace(/^["']+/, '').trim();
 }

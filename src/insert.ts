@@ -1,5 +1,6 @@
 import { App, MarkdownView, Modal, moment, normalizePath, Notice, Setting, TFile } from 'obsidian';
 import { NewFileCollisionMode, NoteTemplate } from './types';
+import { sanitizeFilename } from './templates-folder';
 
 export type InsertStage = 'cursor' | 'newFile' | 'append';
 
@@ -8,6 +9,15 @@ export interface InsertParams {
 	template: NoteTemplate;
 	content: string;
 	collisionMode: NewFileCollisionMode;
+	// Frontmatter values to write into the created note (newFile mode only). Keyed
+	// by property name; values may be empty (the scaffold). Ignored by cursor/append,
+	// which write into a user-owned existing note.
+	properties?: Record<string, string>;
+	// LLM-generated filename title (newFile only; cursor/append ignore it). When
+	// present and non-empty it fills the {{title}} token, or becomes the whole file
+	// name when the template has no token. Empty/whitespace falls back to the name
+	// template's static expansion.
+	title?: string;
 }
 
 export interface InsertResult {
@@ -56,7 +66,21 @@ async function insertAppend(params: InsertParams): Promise<InsertResult> {
 async function insertNewFile(params: InsertParams): Promise<InsertResult> {
 	const folder = params.template.newFileFolder.trim();
 	const nameTemplate = params.template.newFileNameTemplate.trim() || 'ReWrite {{date}} {{time}}';
-	const expanded = expandFilenameTemplate(nameTemplate);
+	const safeTitle = params.title ? titleToFilename(params.title) : '';
+	let expanded: string;
+	if (nameTemplate.includes('{{title}}')) {
+		// Template composes the title explicitly; {{title}} -> '' when no title, then
+		// collapse the doubled separators a missing token leaves behind.
+		expanded = expandFilenameTemplate(nameTemplate, params.title)
+			.replace(/\s{2,}/g, ' ')
+			.trim();
+		if (!expanded) expanded = expandFilenameTemplate('ReWrite {{date}} {{time}}');
+	} else if (safeTitle) {
+		// Flag on but no {{title}} token: the title becomes the whole file name.
+		expanded = safeTitle;
+	} else {
+		expanded = expandFilenameTemplate(nameTemplate);
+	}
 	const filename = expanded.endsWith('.md') ? expanded : `${expanded}.md`;
 	if (folder) {
 		await ensureFolder(params.app, folder);
@@ -64,6 +88,13 @@ async function insertNewFile(params: InsertParams): Promise<InsertResult> {
 	const requestedPath = normalizePath(folder ? `${folder}/${filename}` : filename);
 	const path = await resolveNewFilePath(params.app, requestedPath, params.collisionMode);
 	const file = await params.app.vault.create(path, params.content);
+	// content carries no leading frontmatter (stripped in the pipeline), so this
+	// prepends a real `---...---` block above any `![[audio]]` embed.
+	if (params.properties && Object.keys(params.properties).length > 0) {
+		await params.app.fileManager.processFrontMatter(file, (fm) => {
+			Object.assign(fm, params.properties);
+		});
+	}
 	await params.app.workspace.openLinkText(file.path, '', true);
 	return { mode: 'newFile', path: file.path };
 }
@@ -174,11 +205,36 @@ class RenamePromptModal extends Modal {
 	}
 }
 
-function expandFilenameTemplate(template: string): string {
+function expandFilenameTemplate(template: string, title?: string): string {
 	const now = moment();
+	const safeTitle = title ? titleToFilename(title) : '';
 	return template
 		.replace(/\{\{date\}\}/g, now.format('YYYY-MM-DD'))
-		.replace(/\{\{time\}\}/g, now.format('HHmmss'));
+		.replace(/\{\{time\}\}/g, now.format('HHmmss'))
+		.replace(/\{\{title\}\}/g, safeTitle);
+}
+
+const MAX_TITLE_LEN = 100;
+
+// Make an LLM-generated title safe to use as a file name stem. The model output is
+// far less trusted than a template name, so this hardens beyond sanitizeFilename:
+// collapse whitespace, strip the illegal char set, drop leading dots (hidden/invalid)
+// and trailing dots/spaces (Windows trims them silently), cap length, and guard the
+// reserved Windows device names. Returns '' when nothing usable remains.
+function titleToFilename(title: string): string {
+	const collapsed = title.replace(/\s+/g, ' ').trim();
+	if (!collapsed) return '';
+	let safe = sanitizeFilename(collapsed)
+		.replace(/^\.+/, '')
+		.replace(/[ .]+$/, '');
+	if (safe.length > MAX_TITLE_LEN) {
+		safe = safe.slice(0, MAX_TITLE_LEN).replace(/[ .]+$/, '');
+	}
+	if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(safe)) safe = `_${safe}`;
+	// sanitizeFilename returns 'Untitled' for empty input; treat that as "no usable
+	// title" so the caller falls back to the date template rather than a literal
+	// "Untitled" file.
+	return safe === 'Untitled' ? '' : safe;
 }
 
 function findLastEditedMarkdown(app: App): TFile | null {

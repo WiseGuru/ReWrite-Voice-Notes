@@ -57,6 +57,21 @@ export interface NoteTemplate {
 	// diarization-capable providers (assemblyai/deepgram/revai); a no-op on the
 	// rest. Absent/false means the profile setting governs.
 	diarize?: boolean;
+	// When true, the LLM generates this note's title (filename) from the content and
+	// any provided context, returned via a reserved `noteTitle` key in the same leading
+	// yaml block as noteProperties. Consumed by insertNewFile only; never written to
+	// frontmatter. Positive opt-in: absent/false uses the static newFileNameTemplate.
+	titleFromContent?: boolean;
+	// Frontmatter properties this template asks the LLM to fill from the content.
+	// Authored in template frontmatter as a YAML map (key = property name, value =
+	// instruction). Parsed into an ordered array (order drives both the prompt and
+	// the write order). Applied only for insertMode 'newFile'.
+	noteProperties?: NotePropertySpec[];
+}
+
+export interface NotePropertySpec {
+	name: string;
+	instruction: string;
 }
 
 export interface DestinationOverride {
