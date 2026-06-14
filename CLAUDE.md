@@ -10,8 +10,6 @@ The v1 implementation is feature-complete against [obsidian-voice-notes-spec.md]
 
 When extending the plugin, follow the file layout the spec prescribes: provider adapters under `src/transcription/` and `src/llm/`, factories in each `index.ts`, no provider-specific logic leaking outside its own file.
 
-**Pre-release status: no migrations, no backcompat shims.** There are no real users yet. When changing settings shape, `data.json` keys, `secrets.json.nosync` schema, template structure, or any other persisted format: change it cleanly. Do not write migration code, do not add compatibility read paths, do not preserve deprecated fields "just in case." Existing dev installs can be reset by deleting `data.json` / `secrets.json.nosync`. Drop this rule the moment v1.0.0 ships to the community plugin directory.
-
 ## Documentation maintenance
 
 Update CLAUDE.md with every behavioral change. When modifying code that this document describes (pipeline stages, command IDs, settings keys, gotchas, conventions), update CLAUDE.md in the same change. If a behavioral change has no existing section, add one or drop a note under "Gotchas". Treat the doc update as part of the task, not a follow-up.
