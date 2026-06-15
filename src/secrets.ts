@@ -1,11 +1,12 @@
-import { normalizePath, Platform, Plugin } from 'obsidian';
+import { normalizePath, Plugin } from 'obsidian';
 import { argon2id } from 'hash-wasm';
 import { isPassphraseAcceptable } from 'passphrase-strength';
 
 const SECRETS_FILE = 'secrets.json.nosync';
 const SECRETS_VERSION = 2;
 const VERIFIER_PLAINTEXT = 'rewrite-passphrase-verifier-v1';
-const SAFE_STORAGE_SELFTEST = 'rewrite-safestorage-selftest';
+const SECRET_STORAGE_SELFTEST = 'rewrite-secretstorage-selftest';
+const SELFTEST_SECRET_ID = '__rewrite_selftest__';
 const PBKDF2_ITERATIONS = 600_000;
 const KDF_SALT_BYTES = 16;
 const AES_IV_BYTES = 12;
@@ -20,21 +21,20 @@ const ARGON2_TIME = 3;
 const ARGON2_PARALLELISM = 1;
 const ARGON2_HASH_BYTES = 32;
 
-export type EncryptionMode = 'safeStorage' | 'passphrase';
+export type EncryptionMode = 'passphrase' | 'secretStorage';
 
 export interface EncryptionStatus {
 	mode: EncryptionMode;
 	// passphrase mode with a derived key not yet held in memory this session.
+	// Always false for secretStorage (Obsidian/the OS holds the key; nothing to unlock).
 	locked: boolean;
 	// passphrase mode that has actually had a passphrase set (kdf + verifier on disk).
-	// false = first run on a no-keychain device: prompt to CREATE a passphrase, not unlock.
+	// false = first run on a device without secret storage: prompt to CREATE a passphrase.
+	// Always true for secretStorage.
 	configured: boolean;
-	// OS keychain present, verified by a round-trip self-test, and not a known-insecure backend.
-	safeStorageAvailable: boolean;
-	// OS keychain reports available but is effectively unencrypted (e.g. Chromium basic_text)
-	// or failed the round-trip; we do not offer it and steer the user to a passphrase.
-	safeStorageInsecure: boolean;
-	safeStorageBackend: string | null;
+	// Obsidian's app.secretStorage exists (>= 1.11.4) AND a round-trip self-test passes, so a
+	// device with no working OS secret store (e.g. Linux without a keyring) reads false here.
+	secretStorageAvailable: boolean;
 }
 
 type KdfAlgo = 'pbkdf2' | 'argon2id';
@@ -58,92 +58,163 @@ interface SecretsEnvelope {
 	keys: Record<string, string>;
 }
 
-interface SafeStorageAPI {
-	isEncryptionAvailable(): boolean;
-	encryptString(plain: string): { toString(encoding: string): string };
-	decryptString(buf: unknown): string;
-	getSelectedStorageBackend?(): string;
+// Obsidian's first-party secret store (app.secretStorage, GA 1.11.4). Reached through a narrow
+// cast because the installed typings predate it, and normalized to these three methods. Each
+// may be sync or async depending on the build, so callers await the results.
+type MaybePromise<T> = T | Promise<T>;
+interface SecretStorageLike {
+	getSecret(id: string): MaybePromise<string | null>;
+	setSecret(id: string, value: string): MaybePromise<void>;
+	listSecrets(): MaybePromise<string[]>;
+	deleteSecret(id: string): MaybePromise<void>;
 }
 
-let safeStorageCache: SafeStorageAPI | null | undefined;
-let verifiedSafeStorageCache: SafeStorageAPI | null | undefined;
+// The raw shape as it may appear on app.secretStorage across builds: the documented class API
+// is getSecret/setSecret/listSecrets, but some surfaces expose get/set/list aliases and a
+// delete may or may not exist. getSecretStorage() resolves whatever is present.
+interface RawSecretStorage {
+	getSecret?: (id: string) => MaybePromise<string | null>;
+	get?: (id: string) => MaybePromise<string | null>;
+	setSecret?: (id: string, value: string) => MaybePromise<void>;
+	set?: (id: string, value: string) => MaybePromise<void>;
+	listSecrets?: () => MaybePromise<string[]>;
+	list?: () => MaybePromise<string[]>;
+	deleteSecret?: (id: string) => MaybePromise<void>;
+	removeSecret?: (id: string) => MaybePromise<void>;
+	delete?: (id: string) => MaybePromise<void>;
+}
+
+let secretStorageCache: SecretStorageLike | null | undefined;
+// Cached result of the async availability self-test; read synchronously by defaultEnvelope.
+let secretStorageAvailableCache: boolean | undefined;
 let cachedEnvelope: SecretsEnvelope | null = null;
 let unlockedKey: CryptoKey | null = null;
 
-// Raw electron safeStorage if the platform reports encryption available. Says nothing
-// about whether the backend actually encrypts (see getSafeStorage for that check).
-function getRawSafeStorage(): SafeStorageAPI | null {
-	if (safeStorageCache !== undefined) return safeStorageCache;
-	if (!Platform.isDesktop) {
-		safeStorageCache = null;
-		return null;
-	}
-	try {
-		const req =
-			(window as unknown as { require?: (m: string) => unknown }).require ??
-			(globalThis as unknown as { require?: (m: string) => unknown }).require;
-		if (typeof req !== 'function') {
-			safeStorageCache = null;
-			return null;
-		}
-		const electron = req('electron') as { safeStorage?: SafeStorageAPI } | undefined;
-		const ss = electron?.safeStorage;
-		if (ss && typeof ss.isEncryptionAvailable === 'function' && ss.isEncryptionAvailable()) {
-			safeStorageCache = ss;
-			return ss;
-		}
-	} catch {
-		// fall through
-	}
-	safeStorageCache = null;
-	return null;
+// ---------- Obsidian secret storage (app.secretStorage) ----------
+
+// Prefix ids with the plugin id: app.secretStorage is shared across all installed plugins, so
+// we namespace our keys to avoid colliding with another plugin's.
+function nsId(plugin: Plugin, id: string): string {
+	return `${plugin.manifest.id}:${id}`;
 }
 
-// Verified, secure safeStorage: the backend is not the known-unencrypted Chromium
-// fallback (basic_text), AND an encrypt/decrypt round-trip of a sentinel succeeds.
-// Cached for the session. Used by encrypt/decrypt and the availability checks.
-function getSafeStorage(): SafeStorageAPI | null {
-	if (verifiedSafeStorageCache !== undefined) return verifiedSafeStorageCache;
-	const raw = getRawSafeStorage();
-	if (!raw) {
-		verifiedSafeStorageCache = null;
+function stripNs(plugin: Plugin, nsKey: string): string | null {
+	const prefix = `${plugin.manifest.id}:`;
+	return nsKey.startsWith(prefix) ? nsKey.slice(prefix.length) : null;
+}
+
+// Resolve app.secretStorage (if present) into the normalized three-method shape. Returns null
+// on older Obsidian that lacks the API. Caches for the session. Only feature-detects that the
+// methods exist; the deeper round-trip check is probeSecretStorage() below.
+function getSecretStorage(plugin: Plugin): SecretStorageLike | null {
+	if (secretStorageCache !== undefined) return secretStorageCache;
+	const raw = (plugin.app as unknown as { secretStorage?: RawSecretStorage }).secretStorage;
+	const get = raw?.getSecret ?? raw?.get;
+	const set = raw?.setSecret ?? raw?.set;
+	const list = raw?.listSecrets ?? raw?.list;
+	if (!raw || typeof get !== 'function' || typeof set !== 'function' || typeof list !== 'function') {
+		secretStorageCache = null;
 		return null;
 	}
-	if (typeof raw.getSelectedStorageBackend === 'function') {
-		let backend: string | null = null;
+	const del = raw.deleteSecret ?? raw.removeSecret ?? raw.delete;
+	const normalized: SecretStorageLike = {
+		getSecret: (id) => get.call(raw, id),
+		setSecret: (id, value) => set.call(raw, id, value),
+		listSecrets: () => list.call(raw),
+		// No native delete on this build: clear by storing an empty string. The read paths
+		// treat '' as absent, so a phantom empty entry is harmless.
+		deleteSecret: typeof del === 'function' ? (id) => del.call(raw, id) : (id) => set.call(raw, id, ''),
+	};
+	secretStorageCache = normalized;
+	return normalized;
+}
+
+// Round-trip self-test: write a sentinel, read it back, compare, clean up. A device whose OS
+// secret store is missing or broken (e.g. Linux without a keyring) throws or returns a mismatch
+// here, so we report unavailable and fall back to passphrase. Caches the result so the sync
+// defaultEnvelope() can read availability after warmSecretStorage().
+async function probeSecretStorage(plugin: Plugin): Promise<boolean> {
+	if (secretStorageAvailableCache !== undefined) return secretStorageAvailableCache;
+	const store = getSecretStorage(plugin);
+	if (!store) {
+		secretStorageAvailableCache = false;
+		return false;
+	}
+	const id = nsId(plugin, SELFTEST_SECRET_ID);
+	try {
+		await store.setSecret(id, SECRET_STORAGE_SELFTEST);
+		const got = await store.getSecret(id);
+		await store.deleteSecret(id);
+		secretStorageAvailableCache = got === SECRET_STORAGE_SELFTEST;
+	} catch {
+		secretStorageAvailableCache = false;
+	}
+	return secretStorageAvailableCache;
+}
+
+// Run the probe once and cache it so the synchronous defaultEnvelope() can prefer secret
+// storage on first run. Called from main.ts onload before the first getEncryptionStatus.
+export async function warmSecretStorage(plugin: Plugin): Promise<void> {
+	await probeSecretStorage(plugin);
+}
+
+function secretStorageAvailableSync(): boolean {
+	return secretStorageAvailableCache === true;
+}
+
+// Read every stored key from app.secretStorage to plaintext, stripping our namespace prefix
+// and skipping the self-test sentinel. Empty values are treated as absent.
+async function readAllFromSecretStorage(plugin: Plugin): Promise<Record<string, string>> {
+	const store = getSecretStorage(plugin);
+	if (!store) return {};
+	let ids: string[];
+	try {
+		ids = await store.listSecrets();
+	} catch {
+		return {};
+	}
+	const out: Record<string, string> = {};
+	for (const nsKey of ids) {
+		const id = stripNs(plugin, nsKey);
+		if (id === null || id === SELFTEST_SECRET_ID) continue;
 		try {
-			backend = raw.getSelectedStorageBackend();
+			const v = await store.getSecret(nsKey);
+			if (v) out[id] = v;
 		} catch {
-			backend = null;
-		}
-		// basic_text is Chromium's last-resort backend on Linux and is not encrypted.
-		if (backend === 'basic_text') {
-			verifiedSafeStorageCache = null;
-			return null;
+			// skip unreadable entry
 		}
 	}
-	try {
-		const ct = raw.encryptString(SAFE_STORAGE_SELFTEST).toString('base64');
-		const pt = raw.decryptString(base64ToNodeBuffer(ct));
-		if (pt !== SAFE_STORAGE_SELFTEST) {
-			verifiedSafeStorageCache = null;
-			return null;
-		}
-	} catch {
-		verifiedSafeStorageCache = null;
-		return null;
-	}
-	verifiedSafeStorageCache = raw;
-	return raw;
+	return out;
 }
 
-function getSafeStorageBackend(): string | null {
-	const ss = getRawSafeStorage();
-	if (!ss || typeof ss.getSelectedStorageBackend !== 'function') return null;
+async function writeToSecretStorage(plugin: Plugin, id: string, value: string): Promise<void> {
+	const store = getSecretStorage(plugin);
+	if (!store) throw new Error('Obsidian secret storage is not available on this device.');
+	if (value === '') {
+		await store.deleteSecret(nsId(plugin, id));
+	} else {
+		await store.setSecret(nsId(plugin, id), value);
+	}
+}
+
+// Remove all of our namespaced entries from app.secretStorage. Best-effort; used when switching
+// away from secretStorage mode so keys do not linger in the shared (and possibly synced) store.
+async function clearSecretStorage(plugin: Plugin): Promise<void> {
+	const store = getSecretStorage(plugin);
+	if (!store) return;
+	let ids: string[];
 	try {
-		return ss.getSelectedStorageBackend();
+		ids = await store.listSecrets();
 	} catch {
-		return null;
+		return;
+	}
+	for (const nsKey of ids) {
+		if (stripNs(plugin, nsKey) === null) continue;
+		try {
+			await store.deleteSecret(nsKey);
+		} catch {
+			// best-effort cleanup
+		}
 	}
 }
 
@@ -154,12 +225,13 @@ function secretsPath(plugin: Plugin): string {
 }
 
 function defaultEnvelope(): SecretsEnvelope {
-	// No keychain => passphrase mode, but UNCONFIGURED (no kdf/verifier). The first
-	// pipeline use / settings visit prompts the user to create a passphrase. Nothing
-	// is ever written in this state (saveManyKeys is a no-op while locked).
+	// Prefer Obsidian secret storage when available (warmed at onload). Otherwise passphrase
+	// mode, but UNCONFIGURED (no kdf/verifier): the first pipeline use / settings visit prompts
+	// the user to create a passphrase. Nothing is written in that state (saveManyKeys no-ops
+	// while locked).
 	return {
 		version: SECRETS_VERSION,
-		mode: getSafeStorage() ? 'safeStorage' : 'passphrase',
+		mode: secretStorageAvailableSync() ? 'secretStorage' : 'passphrase',
 		keys: {},
 	};
 }
@@ -201,7 +273,7 @@ function parseEnvelope(raw: string): SecretsEnvelope {
 		return defaultEnvelope();
 	}
 	const mode = parsed.mode;
-	if (mode !== 'safeStorage' && mode !== 'passphrase') {
+	if (mode !== 'passphrase' && mode !== 'secretStorage') {
 		return defaultEnvelope();
 	}
 	const keys = isObject(parsed.keys) ? parsed.keys as Record<string, string> : {};
@@ -256,12 +328,6 @@ function base64ToBytes(b64: string): Uint8Array {
 	const bytes = new Uint8Array(bin.length);
 	for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 	return bytes;
-}
-
-function base64ToNodeBuffer(b64: string): unknown {
-	const Buf = (globalThis as unknown as { Buffer?: { from(s: string, enc: string): unknown } }).Buffer;
-	if (Buf && typeof Buf.from === 'function') return Buf.from(b64, 'base64');
-	return base64ToBytes(b64);
 }
 
 function randomBytes(n: number): Uint8Array {
@@ -391,29 +457,15 @@ async function aesGcmDecrypt(key: CryptoKey, payload: string): Promise<string> {
 
 // ---------- per-mode encrypt/decrypt of a single value ----------
 
-async function encryptValue(envelope: SecretsEnvelope, plaintext: string): Promise<string> {
-	if (envelope.mode === 'safeStorage') {
-		const ss = getSafeStorage();
-		if (!ss) throw new Error('OS keychain encryption is not available on this device.');
-		return ss.encryptString(plaintext).toString('base64');
-	}
-	// passphrase
+// Encrypt/decrypt a single value for the passphrase envelope. secretStorage mode never calls
+// these; it routes values straight to app.secretStorage.
+async function encryptValue(plaintext: string): Promise<string> {
 	if (!unlockedKey) throw new Error('Secrets are locked. Unlock with your passphrase first.');
 	return aesGcmEncrypt(unlockedKey, plaintext);
 }
 
-async function decryptValue(envelope: SecretsEnvelope, stored: string): Promise<string> {
+async function decryptValue(stored: string): Promise<string> {
 	if (stored === '') return '';
-	if (envelope.mode === 'safeStorage') {
-		const ss = getSafeStorage();
-		if (!ss) return '';
-		try {
-			return ss.decryptString(base64ToNodeBuffer(stored));
-		} catch {
-			return '';
-		}
-	}
-	// passphrase
 	if (!unlockedKey) return '';
 	try {
 		return await aesGcmDecrypt(unlockedKey, stored);
@@ -425,10 +477,19 @@ async function decryptValue(envelope: SecretsEnvelope, stored: string): Promise<
 async function decryptAllToPlain(envelope: SecretsEnvelope): Promise<Record<string, string>> {
 	const plain: Record<string, string> = {};
 	for (const id of Object.keys(envelope.keys)) {
-		const v = await decryptValue(envelope, envelope.keys[id] ?? '');
+		const v = await decryptValue(envelope.keys[id] ?? '');
 		if (v) plain[id] = v;
 	}
 	return plain;
+}
+
+// Read every stored key to plaintext regardless of mode: secretStorage lists the store and
+// strips our namespace; passphrase decrypts the envelope. Used by mode transitions.
+async function readAllPlain(plugin: Plugin, envelope: SecretsEnvelope): Promise<Record<string, string>> {
+	if (envelope.mode === 'secretStorage') {
+		return readAllFromSecretStorage(plugin);
+	}
+	return decryptAllToPlain(envelope);
 }
 
 // Write a freshly-built passphrase envelope (kdf + verifier) and re-encrypt `plain`
@@ -445,7 +506,7 @@ async function writePassphraseEnvelope(
 	next.verifier = await aesGcmEncrypt(key, VERIFIER_PLAINTEXT);
 	cachedEnvelope = next;
 	for (const id of Object.keys(plain)) {
-		next.keys[id] = await encryptValue(next, plain[id] ?? '');
+		next.keys[id] = await encryptValue(plain[id] ?? '');
 	}
 	await writeEnvelope(plugin, next);
 }
@@ -464,7 +525,7 @@ async function tryUpgradeToArgon2id(plugin: Plugin, passphrase: string): Promise
 	next.verifier = await aesGcmEncrypt(built.key, VERIFIER_PLAINTEXT);
 	cachedEnvelope = next;
 	for (const id of Object.keys(plain)) {
-		next.keys[id] = await encryptValue(next, plain[id] ?? '');
+		next.keys[id] = await encryptValue(plain[id] ?? '');
 	}
 	await writeEnvelope(plugin, next);
 }
@@ -473,20 +534,12 @@ async function tryUpgradeToArgon2id(plugin: Plugin, passphrase: string): Promise
 
 export async function getEncryptionStatus(plugin: Plugin): Promise<EncryptionStatus> {
 	const envelope = await ensureEnvelope(plugin);
-	const verified = getSafeStorage() !== null;
-	const raw = getRawSafeStorage() !== null;
 	return {
 		mode: envelope.mode,
 		locked: envelope.mode === 'passphrase' && unlockedKey === null,
 		configured: envelope.mode !== 'passphrase' || (envelope.kdf != null && envelope.verifier != null),
-		safeStorageAvailable: verified,
-		safeStorageInsecure: raw && !verified,
-		safeStorageBackend: getSafeStorageBackend(),
+		secretStorageAvailable: await probeSecretStorage(plugin),
 	};
-}
-
-export function isEncryptionAvailable(): boolean {
-	return getSafeStorage() !== null;
 }
 
 export function lockSecrets(): void {
@@ -530,20 +583,30 @@ export async function unlockSecrets(plugin: Plugin, passphrase: string): Promise
 
 export async function saveKey(plugin: Plugin, id: string, key: string): Promise<void> {
 	const envelope = await ensureEnvelope(plugin);
-	if (envelope.mode === 'passphrase' && unlockedKey === null) {
+	if (envelope.mode === 'secretStorage') {
+		await writeToSecretStorage(plugin, id, key);
+		return;
+	}
+	if (unlockedKey === null) {
 		throw new Error('Secrets are locked. Unlock with your passphrase to save keys.');
 	}
 	if (key === '') {
 		delete envelope.keys[id];
 	} else {
-		envelope.keys[id] = await encryptValue(envelope, key);
+		envelope.keys[id] = await encryptValue(key);
 	}
 	await writeEnvelope(plugin, envelope);
 }
 
 export async function saveManyKeys(plugin: Plugin, updates: Record<string, string>): Promise<void> {
 	const envelope = await ensureEnvelope(plugin);
-	if (envelope.mode === 'passphrase' && unlockedKey === null) {
+	if (envelope.mode === 'secretStorage') {
+		for (const id of Object.keys(updates)) {
+			await writeToSecretStorage(plugin, id, updates[id] ?? '');
+		}
+		return;
+	}
+	if (unlockedKey === null) {
 		// Caller (settings save) may run while locked or unconfigured. Don't blow up;
 		// just skip writing so we don't clobber on-disk encrypted values with empties.
 		return;
@@ -553,7 +616,7 @@ export async function saveManyKeys(plugin: Plugin, updates: Record<string, strin
 		if (value === '') {
 			delete envelope.keys[id];
 		} else {
-			envelope.keys[id] = await encryptValue(envelope, value);
+			envelope.keys[id] = await encryptValue(value);
 		}
 	}
 	await writeEnvelope(plugin, envelope);
@@ -561,9 +624,18 @@ export async function saveManyKeys(plugin: Plugin, updates: Record<string, strin
 
 export async function loadKey(plugin: Plugin, id: string): Promise<string> {
 	const envelope = await ensureEnvelope(plugin);
+	if (envelope.mode === 'secretStorage') {
+		const store = getSecretStorage(plugin);
+		if (!store) return '';
+		try {
+			return (await store.getSecret(nsId(plugin, id))) ?? '';
+		} catch {
+			return '';
+		}
+	}
 	const stored = envelope.keys[id];
 	if (typeof stored !== 'string' || stored === '') return '';
-	return decryptValue(envelope, stored);
+	return decryptValue(stored);
 }
 
 export async function deleteKey(plugin: Plugin, id: string): Promise<void> {
@@ -572,7 +644,8 @@ export async function deleteKey(plugin: Plugin, id: string): Promise<void> {
 
 export async function loadAllKeys(plugin: Plugin): Promise<Record<string, string>> {
 	const envelope = await ensureEnvelope(plugin);
-	if (envelope.mode === 'passphrase' && unlockedKey === null) return {};
+	if (envelope.mode === 'secretStorage') return readAllFromSecretStorage(plugin);
+	if (unlockedKey === null) return {};
 	return decryptAllToPlain(envelope);
 }
 
@@ -588,8 +661,8 @@ export async function changeEncryptionMode(
 	if (envelope.mode === 'passphrase' && unlockedKey === null && envelope.kdf) {
 		throw new Error('Unlock secrets with the current passphrase before changing modes.');
 	}
-	if (newMode === 'safeStorage' && !getSafeStorage()) {
-		throw new Error('OS keychain encryption is not available on this device.');
+	if (newMode === 'secretStorage' && !(await probeSecretStorage(plugin))) {
+		throw new Error('Obsidian secret storage is not available on this device.');
 	}
 	if (newMode === 'passphrase') {
 		if (!newPassphrase || newPassphrase.length === 0) {
@@ -600,20 +673,23 @@ export async function changeEncryptionMode(
 		}
 	}
 
-	const plain = await decryptAllToPlain(envelope);
+	const plain = await readAllPlain(plugin, envelope);
+	const wasSecretStorage = envelope.mode === 'secretStorage';
 
 	if (newMode === 'passphrase') {
 		await writePassphraseEnvelope(plugin, newPassphrase ?? '', plain);
+		if (wasSecretStorage) await clearSecretStorage(plugin);
 		return;
 	}
 
-	// safeStorage
+	// secretStorage: write each value to the OS-backed store, then record the mode in a minimal
+	// envelope (the keys map stays empty; values live in app.secretStorage, not on disk).
 	unlockedKey = null;
-	const next: SecretsEnvelope = { version: SECRETS_VERSION, mode: 'safeStorage', keys: {} };
-	cachedEnvelope = next;
 	for (const id of Object.keys(plain)) {
-		next.keys[id] = await encryptValue(next, plain[id] ?? '');
+		await writeToSecretStorage(plugin, id, plain[id] ?? '');
 	}
+	const next: SecretsEnvelope = { version: SECRETS_VERSION, mode: 'secretStorage', keys: {} };
+	cachedEnvelope = next;
 	await writeEnvelope(plugin, next);
 }
 

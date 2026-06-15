@@ -17,7 +17,7 @@ import { isPathInTemplatesFolder, loadTemplatesFromFolder } from './templates-fo
 import { isPathSharedCore, loadSharedCoreFromFile } from './shared-core';
 import { isPathAssistantPrompt, loadAssistantPromptFromFile } from './assistant-prompt';
 import { isPathKnownNouns, loadKnownNounsFromFile } from './known-nouns';
-import { changeEncryptionMode, EncryptionStatus, getEncryptionStatus, unlockSecrets } from './secrets';
+import { changeEncryptionMode, EncryptionStatus, getEncryptionStatus, unlockSecrets, warmSecretStorage } from './secrets';
 
 export default class ReWritePlugin extends Plugin implements PipelineHost {
 	settings!: GlobalSettings;
@@ -32,6 +32,9 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 
 	async onload(): Promise<void> {
 		this.settings = await loadSettings(this);
+		// Warm the secret-storage probe before reading status so a first run (no envelope yet)
+		// can default to secret storage when it is available.
+		await warmSecretStorage(this);
 		this.encryptionStatus = await getEncryptionStatus(this);
 		this.whisperHost = new WhisperHost(this);
 		bindWhisperHost(this.whisperHost);

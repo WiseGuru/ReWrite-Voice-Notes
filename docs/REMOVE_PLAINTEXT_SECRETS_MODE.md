@@ -58,3 +58,13 @@ Decisions taken:
 
 ## Future work (SecretStorage, when GA)
 When `app.secretStorage` reaches GA and is confirmed on mobile, add a `secretStorage` encryption mode that routes `saveKey`/`loadKey`/`loadAllKeys` to `setSecret`/`getSecret`/`listSecrets` under the existing key IDs (`profile:desktop:transcription`, etc.). It would become the zero-config, cross-platform option that plaintext used to provide, sitting alongside `safeStorage` and `passphrase`. Bump the obsidian dev dependency for real typings and raise `minAppVersion` to the GA version at that time.
+
+## Update 2026-06-14 — IMPLEMENTED (and it REPLACED safeStorage)
+
+`secretStorage` mode shipped. It did NOT sit alongside `safeStorage`; it **replaced** it. Obsidian's `app.secretStorage` uses the same OS-keychain backend our hand-rolled `safeStorage` mode did, so keeping both was redundant. The OS-keychain mode was never released (plugin still unpublished), so `safeStorage` was removed outright with no migration. Final user-facing model: **`secretStorage`** (preferred/default when available) + **`passphrase`** (always-available fallback).
+
+Deviations from the plan above:
+- **`minAppVersion` stays `1.4.0`** (not raised). `secretStorage` is feature-detected at runtime via a narrow `SecretStorageLike` cast + a round-trip self-test, so older Obsidian still loads the plugin and lands on passphrase. No obsidian dep bump was needed.
+- Keys are **namespaced with `manifest.id`** (the store is shared across plugins).
+- Values live in Obsidian's store, not `secrets.json.nosync` (the envelope just records `mode`). This means keys **may sync across devices** via Obsidian Sync — disclosed in the settings mode description.
+- See CLAUDE.md "Secrets encryption" for the current behavior.

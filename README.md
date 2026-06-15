@@ -21,7 +21,7 @@ You bring your own provider keys. Nothing is sent to a ReWrite server; the plugi
 - **Ad-hoc voice instructions**: speak your assistant's name followed by an instruction mid-recording (e.g. "Scrivener, turn this into a checklist") and the directive is extracted and added to the cleanup prompt for that run only. The trigger word is configurable.
 - **Assistant prompt**: a vault Markdown file defines the persona and standing instructions prefaced to the cleanup step, so you can shape tone and behavior without touching settings.
 - **Known nouns**: a vault Markdown file of proper nouns (with optional misheard variants) that the LLM preserves verbatim, fixing names the transcriber tends to mangle.
-- **API key encryption**: keys are stored per device in the verified OS keychain (desktop) or with a strength-checked passphrase using Argon2id/PBKDF2 AES-GCM (cross-platform). There is no unencrypted option.
+- **API key encryption**: keys are stored in Obsidian's built-in secret storage (OS-encrypted; the default when available) or with a strength-checked passphrase using Argon2id/PBKDF2 AES-GCM (cross-platform fallback). There is no unencrypted option.
 
 ## Tested providers
 
@@ -229,12 +229,12 @@ For podcasts, meetings, and interviews, you can turn on **Identify speakers** in
 
 API keys are stored in `<YourVault>/.obsidian/plugins/rewrite-plugin/secrets.json.nosync`, separately from the rest of the plugin's settings.
 
-The plugin supports two at-rest encryption modes for this file, selectable in settings under "API key encryption". There is no unencrypted option:
+The plugin supports two at-rest encryption modes, selectable in settings under "API key encryption". There is no unencrypted option:
 
-- **OS keychain** (`safeStorage`): the default on desktop when available. Keys are encrypted with Electron's `safeStorage` API, which is tied to the user account on that specific machine. The plugin verifies the keychain with a round-trip self-test and refuses to use a backend that does not actually encrypt (such as Linux's `basic_text` fallback), steering you to a passphrase instead. The encrypted blob cannot be decrypted on another desktop, on mobile, or in a fresh OS profile.
-- **Passphrase**: AES-GCM encryption with a key derived from a passphrase you set, using Argon2id (a memory-hard key-derivation function) or PBKDF2 on devices that cannot run Argon2id. Works on every platform including mobile, and the blob is portable across devices (you re-enter the passphrase to unlock on each one). When you set a passphrase the plugin enforces a minimum strength and offers a one-click generator that produces a strong 6-word passphrase. On devices without an OS keychain (mobile, Linux-without-keyring), setting a passphrase is required before any key can be saved.
+- **Obsidian secret storage** (`secretStorage`): the default when available (Obsidian 1.11.4 or later with a working OS secret store). Keys are stored in Obsidian's built-in secret store, which encrypts them at rest using your operating system's keychain and is shared across plugins. Because it is an Obsidian-managed store, **if you use Obsidian Sync these keys may sync across your devices** (a convenience, but note your keys then leave the single-device boundary). The plugin runs a round-trip self-test and falls back to passphrase on a device with no working OS secret store (for example Linux without a keyring). In this mode the keys do **not** live in `secrets.json.nosync` (that file only records which mode is in use).
+- **Passphrase**: AES-GCM encryption with a key derived from a passphrase you set, using Argon2id (a memory-hard key-derivation function) or PBKDF2 on devices that cannot run Argon2id. Works on every platform including mobile, the keys stay on the device (stored encrypted in `secrets.json.nosync`), and the blob is portable across devices (you re-enter the passphrase to unlock on each one). When you set a passphrase the plugin enforces a minimum strength and offers a one-click generator that produces a strong 6-word passphrase. On devices where Obsidian secret storage is unavailable, setting a passphrase is required before any key can be saved.
 
-Unless you are using passphrase mode, **you should exclude `secrets.json.nosync` from any vault sync mechanism** and enter keys once per device. Configure the exclusion **before the first sync**, since files already uploaded usually remain on the remote.
+If you use **passphrase mode** and do not want the encrypted key file copied around, **you can exclude `secrets.json.nosync` from any vault sync mechanism** and enter keys once per device. Configure the exclusion **before the first sync**, since files already uploaded usually remain on the remote. (In Obsidian secret storage mode this file holds no keys, so excluding it has no effect on the keys themselves.)
 
 The path to exclude is always:
 
@@ -311,7 +311,7 @@ secrets.json.nosync
 Obsidian on iOS and Android runs in a constrained WebView. A few things behave differently from desktop:
 
 - **iOS screen-off**: `MediaRecorder` silently stops capturing audio when the screen turns off on iOS. The plugin cannot prevent this; keep the screen on while recording, or use the Paste tab with an OS-level dictation keyboard.
-- **Mobile requires a passphrase** because Electron's `safeStorage` (the OS keychain) is not available there. On first use the plugin prompts you to set a passphrase before any key can be saved; keys are then encrypted with Argon2id/PBKDF2 AES-GCM. The `secrets.json.nosync` file uses the `.nosync` filename so iCloud Drive will skip it; for other sync tools, apply the exclusion rules above (or use passphrase mode if you intend to sync the file, since the blob is portable when you re-enter the passphrase).
+- **Mobile encryption**: if your Obsidian version provides secret storage on mobile (1.11.4 or later), keys use it just like on desktop. Otherwise the plugin prompts you to set a passphrase before any key can be saved, and keys are then encrypted with Argon2id/PBKDF2 AES-GCM. The `secrets.json.nosync` file (which holds encrypted keys only in passphrase mode) uses the `.nosync` filename so iCloud Drive will skip it; for other sync tools, apply the exclusion rules above.
 - **Recording size limit**: each transcription provider enforces its own ceiling (OpenAI Whisper and Groq are the tightest at 25 MB; AssemblyAI, Deepgram, and Rev.ai allow gigabytes). These are provider-API limits, not Obsidian ones, and are most likely to bite on long mobile recordings with the 25 MB providers.
 
 ## Known limitations (v1)

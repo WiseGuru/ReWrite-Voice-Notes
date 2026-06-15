@@ -165,21 +165,21 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			});
 			const resetBtn = banner.createEl('button', { text: 'Forgot passphrase? Reset', cls: 'mod-warning' });
 			resetBtn.addEventListener('click', () => this.openResetModal());
-		} else if (status.mode === 'safeStorage') {
+		} else if (status.mode === 'secretStorage') {
 			banner.addClass('is-ok');
-			const backend = status.safeStorageBackend ? ` (${status.safeStorageBackend})` : '';
-			banner.createEl('span', { text: `Encrypted via OS keychain${backend}.` });
+			banner.createEl('span', {
+				text: 'Encrypted via Obsidian secret storage. If you use Obsidian Sync, these keys may sync across your devices.',
+			});
 		} else if (status.mode === 'passphrase') {
 			banner.addClass('is-ok');
 			banner.createEl('span', { text: 'Encrypted with passphrase. Unlocked for this session.' });
 		}
 
-		if (status.safeStorageInsecure) {
-			const backend = status.safeStorageBackend ? ` (reported "${status.safeStorageBackend}")` : '';
+		if (!status.secretStorageAvailable) {
 			const note = parent.createDiv({ cls: 'rewrite-encryption-banner is-warning' });
-			note.createEl('strong', { text: 'OS keychain unavailable.' });
+			note.createEl('strong', { text: 'Obsidian secret storage unavailable.' });
 			note.createEl('span', {
-				text: ` Your operating system's secret store${backend} does not actually encrypt, so it is not offered here. Use a passphrase instead.`,
+				text: ' This device has no working OS secret store, or Obsidian is older than 1.11.4, so only the passphrase option is offered. Update Obsidian to use the OS-backed option.',
 			});
 		}
 
@@ -194,7 +194,9 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			.setName('Encryption mode')
 			.setDesc(this.encryptionModeDescription(status))
 			.addDropdown((dd) => {
-				if (status.safeStorageAvailable) dd.addOption('safeStorage', 'OS keychain (recommended)');
+				if (status.secretStorageAvailable || status.mode === 'secretStorage') {
+					dd.addOption('secretStorage', 'Obsidian secret storage (recommended)');
+				}
 				dd.addOption('passphrase', 'Passphrase (cross-platform)');
 				dd.setValue(status.mode);
 				dd.onChange((v) => {
@@ -263,14 +265,14 @@ export class ReWriteSettingTab extends PluginSettingTab {
 		}).open();
 	}
 
-	private encryptionModeDescription(status: { mode: EncryptionMode; safeStorageAvailable: boolean; safeStorageBackend: string | null }): string {
+	private encryptionModeDescription(status: { mode: EncryptionMode; secretStorageAvailable: boolean }): string {
 		const lines: string[] = [];
-		if (status.safeStorageAvailable) {
-			lines.push(`OS keychain: encrypted by your operating system (${status.safeStorageBackend ?? 'detected'}), verified by a round-trip check. Strongest, but only works on this machine.`);
+		if (status.secretStorageAvailable) {
+			lines.push('Obsidian secret storage: encrypted at rest by your operating system and managed by Obsidian. Shared with other plugins and, if you use Obsidian Sync, may sync your keys across devices. Recommended.');
 		} else {
-			lines.push('OS keychain: not available on this device (no working, verified keyring detected).');
+			lines.push('Obsidian secret storage: not available on this device (needs Obsidian 1.11.4+ and a working OS secret store).');
 		}
-		lines.push('Passphrase: AES-GCM with an Argon2id-derived key (PBKDF2 fallback on devices that cannot run Argon2id). You enter a passphrase once per session. Works on every platform, including mobile.');
+		lines.push('Passphrase: AES-GCM with an Argon2id-derived key (PBKDF2 fallback on devices that cannot run Argon2id). You enter a passphrase once per session, and the keys stay on this device. Works on every platform, including mobile.');
 		return lines.join(' ');
 	}
 
@@ -300,7 +302,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			}
 			await changeEncryptionMode(this.plugin, next);
 			await this.plugin.refreshEncryptionStatus();
-			new Notice('ReWrite: switched to OS keychain storage.');
+			new Notice('ReWrite: switched to Obsidian secret storage.');
 			this.display();
 		} catch (e) {
 			console.error('ReWrite: encryption mode change failed', e);
