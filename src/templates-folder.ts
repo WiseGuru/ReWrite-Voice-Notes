@@ -252,7 +252,7 @@ export async function updateDefaultTemplates(app: App, folderPath: string): Prom
 			entries.push({ id, name: onDisk.name, path: child.path, status: 'unchanged', changes, conflicts: cf });
 			continue;
 		}
-		if (changedOnDisk) await app.vault.modify(child, rendered);
+		if (changedOnDisk) await app.vault.process(child, () => rendered);
 		if (cf.length > 0) {
 			conflicts++;
 			entries.push({ id, name: onDisk.name, path: child.path, status: 'conflict', changes, conflicts: cf });

@@ -56,10 +56,11 @@ async function insertAppend(params: InsertParams): Promise<InsertResult> {
 		new Notice('No note is open. Creating a new note.');
 		return insertNewFile(params);
 	}
-	const existing = await params.app.vault.read(file);
-	const needsBlankLine = existing.length > 0 && !existing.endsWith('\n\n');
-	const separator = existing.length === 0 ? '' : needsBlankLine ? (existing.endsWith('\n') ? '\n' : '\n\n') : '';
-	await params.app.vault.modify(file, existing + separator + params.content);
+	await params.app.vault.process(file, (existing) => {
+		const needsBlankLine = existing.length > 0 && !existing.endsWith('\n\n');
+		const separator = existing.length === 0 ? '' : needsBlankLine ? (existing.endsWith('\n') ? '\n' : '\n\n') : '';
+		return existing + separator + params.content;
+	});
 	return { mode: 'append', path: file.path };
 }
 

@@ -246,7 +246,7 @@ export async function writeTemplateUpdateReport(
 	const content = renderUpdateReport(result);
 	const existing = app.vault.getAbstractFileByPath(path);
 	if (existing instanceof TFile) {
-		await app.vault.modify(existing, content);
+		await app.vault.process(existing, () => content);
 	} else {
 		if (folder) await ensureFolder(app, folder);
 		await app.vault.create(path, content);

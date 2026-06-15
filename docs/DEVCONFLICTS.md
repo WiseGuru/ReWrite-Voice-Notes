@@ -6,7 +6,7 @@ A review of the ReWrite plugin against Obsidian's official developer documentati
 - Submission requirements: https://docs.obsidian.md/Plugins/Releasing/Submission+requirements+for+plugins
 - Developer policies: https://docs.obsidian.md/Developer+policies
 
-Scope: this document only **identifies** conflicts and potential problems. It does not propose or apply fixes. Severity labels are this reviewer's estimate of how likely each item is to matter during community-plugin review.
+Scope: this document identifies conflicts and potential problems. Severity labels are this reviewer's estimate of how likely each item is to matter during community-plugin review. Each finding now carries a **Resolution** line recording how it was handled (fixed, or accepted as correct/intentional with rationale).
 
 ---
 
@@ -18,6 +18,8 @@ Scope: this document only **identifies** conflicts and potential problems. It do
 - Developer policy: plugins must "Include a LICENSE file and clearly indicate the license" and respect copyright / credit incorporated code.
 - The license body (0BSD-style permissive grant) is fine, but the copyright holder is wrong, which is a copyright-attribution problem, not just cosmetic.
 
+> **Resolution: Fixed.** [LICENSE](../LICENSE) now reads `Copyright (C) 2026 WiseGuru`; the 0BSD grant body is kept verbatim (license choice confirmed: 0BSD's only trade-off vs MIT is no mandatory attribution, which is acceptable here).
+
 ### 2. Node.js APIs used while `isDesktopOnly: false`
 [manifest.json](../manifest.json) sets `isDesktopOnly: false`, but the plugin imports Node built-ins (`child_process`, `net`, `fs`, `process`) in [src/whisper-host.ts](../src/whisper-host.ts).
 
@@ -25,8 +27,12 @@ Scope: this document only **identifies** conflicts and potential problems. It do
 - The plugin does this deliberately and defensibly: the Node modules are lazy-`require`d only inside `Platform.isDesktop` guards (the local whisper.cpp host is a desktop-only feature), so mobile never touches them. This is the accepted pattern for a mixed desktop/mobile plugin.
 - Still flag-worthy: automated review and human reviewers frequently catch Node imports in non-desktop-only manifests. Expect to have to justify it. The casts at [src/whisper-host.ts:83-92](../src/whisper-host.ts#L83-L92) (`window.require` / `globalThis.process`) are part of the same pattern.
 
+> **Resolution: Accepted as-is.** `isDesktopOnly` stays `false` so mobile keeps the cloud-provider features; Node modules are lazy-`require`d only inside `Platform.isDesktop` guards (the local whisper.cpp host), so mobile never loads them. The README already discloses the desktop-only host. This is the documented pattern for a mixed desktop/mobile plugin; be ready to explain it in review.
+
 ### 3. `package.json` license identifier is not a valid SPDX id
 [package.json](../package.json) line 14 declares `"license": "0-BSD"`. The SPDX identifier is `0BSD` (no hyphen). Tooling that validates SPDX will not recognize `0-BSD`.
+
+> **Resolution: Fixed.** [package.json](../package.json) now declares `"license": "0BSD"`.
 
 ---
 
@@ -41,6 +47,8 @@ Guideline: "Use `Vault.process` instead of `Vault.modify`" for background edits 
 
 The latter two are background, non-active-file writes; `Vault.process` would be the recommended atomic form.
 
+> **Resolution: Fixed.** All three sites now use `Vault.process(file, (data) => ...)`: [insert.ts](../src/insert.ts) `insertAppend` computes the separator from the callback's `data` (and no longer does a separate `vault.read`), [templates-folder.ts](../src/templates-folder.ts) uses `process(child, () => rendered)`, and [template-guide.ts](../src/template-guide.ts) uses `process(existing, () => content)`. Behavior is unchanged.
+
 ### 5. `app.vault.adapter` used instead of `app.vault`
 Guideline: prefer `app.vault` over `app.vault.adapter` (caching + serialized, safer operations).
 
@@ -48,6 +56,8 @@ Guideline: prefer `app.vault` over `app.vault.adapter` (caching + serialized, sa
 - [src/whisper-host.ts:397-427](../src/whisper-host.ts#L397-L427) — `adapter.exists/read/write/remove` for the PID sidecar.
 
 Both touch config/sidecar files that are intentionally not regular vault notes (e.g. the `.nosync` secrets envelope), so direct adapter access is arguably justified — but it is still a documented deviation a reviewer may question.
+
+> **Resolution: Accepted as correct (reclassified).** Both paths resolve under `plugin.manifest.dir` (`.obsidian/plugins/rewrite-plugin/`), which is the plugin config directory, not vault note content. The `app.vault` TFile API does not address files there; `app.vault.adapter` is the appropriate API for plugin-config files. No change.
 
 ### 6. Use of undocumented / private Obsidian internals
 The guidelines steer away from relying on internals not in the public API (they can change without notice). The plugin reaches several via `as unknown as` casts:
@@ -58,10 +68,14 @@ The guidelines steer away from relying on internals not in the public API (they 
 
 These are localized behind narrow interfaces (the documented pattern for when a cast is unavoidable), but they remain private-API dependencies that can break on an Obsidian update.
 
+> **Resolution: Accepted as-is.** Each access is already isolated behind a narrow local interface + cast, which is the recommended mitigation when a needed API is absent from the public typings. `secretStorage` is a GA public API the bundled typings simply predate. Left unchanged; revisit if a future typings update makes any of these first-class.
+
 ### 7. Editor-dependent commands use `callback` instead of `editorCheckCallback`
 Guideline: "Use `editorCallback` or `editorCheckCallback` for commands requiring an active Markdown editor."
 
 - [src/main.ts:80-86](../src/main.ts#L80-L86) — `process-text` requires an active Markdown editor/selection but is registered with a plain `callback` and checks for an editor internally (showing a Notice when absent). Using `editorCheckCallback` would let Obsidian hide the command when no editor is active, which is the recommended behavior. (The whisper start/stop commands already use `checkCallback` correctly.)
+
+> **Resolution: Accepted as intentional (reclassified).** `processTextWithTemplate` does not strictly require an editor: when none is active it shows a guiding Notice ("Open a Markdown note or select text"). Switching to `editorCheckCallback` would hide the command entirely in that state and remove that fallback. Kept as `callback` by design.
 
 ---
 
@@ -69,6 +83,8 @@ Guideline: "Use `editorCallback` or `editorCheckCallback` for commands requiring
 
 ### 8. `manifest.json` missing `author` / `authorUrl`
 [manifest.json](../manifest.json) has no `author` or `authorUrl` fields. Not strictly required, but conventional and present in the sample manifest; pairs with finding #1 (the stale LICENSE copyright).
+
+> **Resolution: Fixed.** [manifest.json](../manifest.json) now sets `author` (`WiseGuru`), `authorUrl` (`https://github.com/WiseGuru`), and `fundingUrl` (`https://wyz.guru/buy-someone-else-coffee/`).
 
 ### 9. `app.vault.getFiles()` full-vault scan
 [src/ui/audio-source.ts:18](../src/ui/audio-source.ts#L18) iterates all vault files to filter audio by extension. The guideline's "don't iterate all files" advice is specifically about *finding a file by path* (use `getFileByPath`), which this is not — there is no extension index in the API, so a scan is reasonable. Listed only for completeness; not a real conflict.
