@@ -27,6 +27,38 @@ import { PassphraseModal } from '../ui/passphrase-modal';
 // Sentinel value for the "Custom..." entry in a model dropdown; never written to config.model.
 const CUSTOM_MODEL_OPTION = '__rewrite_custom__';
 
+// Probe the locations scripts/build-whisper-linux.sh installs whisper-server to,
+// plus the common system/Homebrew paths, and return the first that exists.
+// Desktop-only (lazy-requires fs/os via the same window.require pattern as whisper-host.ts);
+// returns null on mobile, when require is unavailable, or when nothing is found.
+function detectWhisperBinary(): string | null {
+	if (!Platform.isDesktop) return null;
+	try {
+		const req = (window as unknown as { require?: (m: string) => unknown }).require;
+		if (typeof req !== 'function') return null;
+		const fs = req('fs') as { existsSync(p: string): boolean };
+		const os = req('os') as { homedir(): string };
+		const path = req('path') as { join(...parts: string[]): string };
+		const home = os.homedir();
+		const exe = Platform.isWin ? 'whisper-server.exe' : 'whisper-server';
+		const candidates = [
+			// Build-script defaults: symlink first, then the built binary.
+			path.join(home, '.local', 'bin', exe),
+			path.join(home, '.local', 'share', 'whisper.cpp', 'build', 'bin', exe),
+			// Common system / Homebrew locations.
+			path.join('/usr', 'local', 'bin', exe),
+			path.join('/opt', 'homebrew', 'bin', exe),
+			path.join('/usr', 'bin', exe),
+		];
+		for (const candidate of candidates) {
+			if (fs.existsSync(candidate)) return candidate;
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
 // Cleanup output runs ~256 tokens per minute of speech (≈150 wpm × ~1.3 tokens/word,
 // padded ~20% for headings, bullets, and Speaker labels in structured/diarized notes).
 // The "Maximum note length" dropdown maps these minute presets onto config.maxTokens;
@@ -718,14 +750,27 @@ export class ReWriteSettingTab extends PluginSettingTab {
 
 		new Setting(parent)
 			.setName('Binary path')
-			.setDesc('Absolute path to whisper-server (or whisper-server.exe on Windows).')
+			.setDesc('Absolute path to whisper-server (or whisper-server.exe on Windows). The Linux build script (scripts/build-whisper-linux.sh) installs it to ~/.local/bin/whisper-server by default; use Auto-detect to fill this in.')
 			.addText((t) => {
 				t.setValue(cfg.binaryPath);
-				t.setPlaceholder('/usr/local/bin/whisper-server');
+				t.setPlaceholder('~/.local/bin/whisper-server');
 				t.onChange(async (v) => {
 					cfg.binaryPath = v;
 					await this.commit();
 				});
+			})
+			.addExtraButton((b) => {
+				b.setIcon('search').setTooltip('Look for whisper-server in the build script\'s install locations').onClick(() => void this.runGuardedButton(b, async () => {
+					const found = detectWhisperBinary();
+					if (found) {
+						cfg.binaryPath = found;
+						await this.commit();
+						new Notice(`ReWrite: found whisper-server at ${found}`);
+						this.display();
+					} else {
+						new Notice('ReWrite: no whisper-server found in the usual install locations. Set the path manually.');
+					}
+				}));
 			});
 
 		new Setting(parent)
