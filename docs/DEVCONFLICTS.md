@@ -57,7 +57,7 @@ Guideline: prefer `app.vault` over `app.vault.adapter` (caching + serialized, sa
 
 Both touch config/sidecar files that are intentionally not regular vault notes (e.g. the `.nosync` secrets envelope), so direct adapter access is arguably justified — but it is still a documented deviation a reviewer may question.
 
-> **Resolution: Accepted as correct (reclassified).** Both paths resolve under `plugin.manifest.dir` (`.obsidian/plugins/rewrite-plugin/`), which is the plugin config directory, not vault note content. The `app.vault` TFile API does not address files there; `app.vault.adapter` is the appropriate API for plugin-config files. No change.
+> **Resolution: Accepted as correct (reclassified).** Both paths resolve under `plugin.manifest.dir` (`.obsidian/plugins/rewrite-voice-notes/`), which is the plugin config directory, not vault note content. The `app.vault` TFile API does not address files there; `app.vault.adapter` is the appropriate API for plugin-config files. No change.
 
 ### 6. Use of undocumented / private Obsidian internals
 The guidelines steer away from relying on internals not in the public API (they can change without notice). The plugin reaches several via `as unknown as` casts:

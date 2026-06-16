@@ -81,7 +81,7 @@ Notes:
 Until the plugin is in the community plugin directory, install manually:
 
 1. Build or download the release artifacts: `main.js`, `manifest.json`, `styles.css`.
-2. Create the folder `<YourVault>/.obsidian/plugins/rewrite-plugin/`.
+2. Create the folder `<YourVault>/.obsidian/plugins/rewrite-voice-notes/`.
 3. Copy the three files into that folder.
 4. In Obsidian, go to Settings, Community plugins, and enable "ReWrite (Voice Notes)". (Make sure Restricted mode is off.)
 5. Open Settings, ReWrite (Voice Notes), enter at least one provider API key, and pick a model for both the transcription and LLM provider.
@@ -89,8 +89,8 @@ Until the plugin is in the community plugin directory, install manually:
 ### Building from source
 
 ```bash
-git clone https://github.com/<your-fork>/rewrite-plugin.git
-cd rewrite-plugin
+git clone https://github.com/<your-fork>/rewrite-voice-notes.git
+cd rewrite-voice-notes
 npm install
 npm run build
 ```
@@ -227,7 +227,7 @@ For podcasts, meetings, and interviews, you can turn on **Identify speakers** in
 
 ## Excluding `secrets.json.nosync` from sync
 
-API keys are stored in `<YourVault>/.obsidian/plugins/rewrite-plugin/secrets.json.nosync`, separately from the rest of the plugin's settings.
+API keys are stored in `<YourVault>/.obsidian/plugins/rewrite-voice-notes/secrets.json.nosync`, separately from the rest of the plugin's settings.
 
 The plugin supports two at-rest encryption modes, selectable in settings under "API key encryption". There is no unencrypted option:
 
@@ -239,14 +239,14 @@ If you use **passphrase mode** and do not want the encrypted key file copied aro
 The path to exclude is always:
 
 ```
-.obsidian/plugins/rewrite-plugin/secrets.json.nosync
+.obsidian/plugins/rewrite-voice-notes/secrets.json.nosync
 ```
 
 ### Obsidian Sync (official)
 
 Obsidian Sync excludes folders, not individual files (Settings, Sync, Excluded folders). You have two options:
 
-- Exclude the entire `.obsidian/plugins/rewrite-plugin` folder and accept that you will lose template/profile sync (`data.json` lives there too).
+- Exclude the entire `.obsidian/plugins/rewrite-voice-notes` folder and accept that you will lose template/profile sync (`data.json` lives there too).
 - Or sync the folder and accept that the encrypted `secrets.json.nosync` blob will be uploaded; on other devices it will fail to decrypt and the plugin will treat it as no key set, prompting you to enter the key again.
 
 ### Syncthing
@@ -255,7 +255,7 @@ Add to `.stignore` in the synced folder root:
 
 ```
 // ReWrite plugin secrets, never sync API keys
-.obsidian/plugins/rewrite-plugin/secrets.json.nosync
+.obsidian/plugins/rewrite-voice-notes/secrets.json.nosync
 ```
 
 If the vault is not at the Syncthing folder root, omit the leading slash from any patterns.
@@ -265,7 +265,7 @@ If the vault is not at the Syncthing folder root, omit the leading slash from an
 Add this line to `.sync/IgnoreList` on each peer:
 
 ```
-.obsidian/plugins/rewrite-plugin/secrets.json.nosync
+.obsidian/plugins/rewrite-voice-notes/secrets.json.nosync
 ```
 
 ### Git / GitHub
@@ -274,14 +274,14 @@ Add to the vault's `.gitignore`:
 
 ```gitignore
 # ReWrite plugin, never commit API keys
-.obsidian/plugins/rewrite-plugin/secrets.json.nosync
+.obsidian/plugins/rewrite-voice-notes/secrets.json.nosync
 ```
 
 If you have already committed it:
 
 ```bash
-git rm --cached .obsidian/plugins/rewrite-plugin/secrets.json.nosync
-git commit -m "remove rewrite-plugin secrets from tracking"
+git rm --cached .obsidian/plugins/rewrite-voice-notes/secrets.json.nosync
+git commit -m "remove rewrite-voice-notes secrets from tracking"
 ```
 
 ### Dropbox
@@ -290,7 +290,7 @@ Dropbox has no ignore-file mechanism. Use Selective Sync:
 
 1. Open the Dropbox desktop app.
 2. Preferences, Sync, Selective Sync.
-3. Deselect the `rewrite-plugin` plugin folder, or use file-level exclusions if your Dropbox plan supports them.
+3. Deselect the `rewrite-voice-notes` plugin folder, or use file-level exclusions if your Dropbox plan supports them.
 
 Alternatively, delete `secrets.json.nosync` from Dropbox via the web interface after setup; the plugin will recreate it locally when you next enter keys.
 
