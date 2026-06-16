@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(npm run *)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:docs.obsidian.md)"
     ]
   }
 }
