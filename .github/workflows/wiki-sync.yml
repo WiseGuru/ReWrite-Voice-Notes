@@ -1,0 +1,54 @@
+name: Sync wiki
+
+# Mirrors the canonical docs in wiki/ to the GitHub Wiki repo
+# (ReWrite-Voice-Notes.wiki.git). The wiki must be enabled and have at
+# least one page created once in repo settings before the first run.
+# Edit docs in wiki/; the wiki repo is a generated mirror, never hand-edited.
+
+on:
+    push:
+        branches: [master]
+        paths:
+            - "wiki/**"
+            - ".github/workflows/wiki-sync.yml"
+    workflow_dispatch:
+
+permissions:
+    contents: write
+
+concurrency:
+    group: wiki-sync
+    cancel-in-progress: true
+
+jobs:
+    sync:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repo
+              uses: actions/checkout@v4
+
+            - name: Mirror wiki/ to the wiki repo
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  set -euo pipefail
+                  wiki_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+
+                  git config --global user.name "github-actions[bot]"
+                  git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+                  git clone --depth 1 "$wiki_url" wiki-repo
+
+                  # Replace the wiki contents with the repo's wiki/ folder,
+                  # preserving the wiki repo's own .git directory.
+                  find wiki-repo -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+                  cp -R wiki/. wiki-repo/
+
+                  cd wiki-repo
+                  git add -A
+                  if git diff --cached --quiet; then
+                      echo "Wiki already up to date; nothing to push."
+                      exit 0
+                  fi
+                  git commit -m "Sync wiki from ${GITHUB_SHA}"
+                  git push origin HEAD

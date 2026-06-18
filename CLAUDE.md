@@ -18,6 +18,31 @@ Some subsystems are documented in depth in linked `docs/` files (currently [docs
 
 There is a second, user-facing doc to keep in sync: the **template guide** (`DEFAULT_TEMPLATE_GUIDE` in [src/template-guide.ts](src/template-guide.ts)), seeded into the vault by Populate. Any change to the template structure — a new/changed `NoteTemplate` field or frontmatter property, the prompt-assembly order, the default-template set or count, or what the shared core carries — must update the guide in the same change: add the property to its frontmatter table AND give the behavior its own `##` section. See the Templates section for the full rule.
 
+The user-facing reference docs live in the **wiki** (the [`wiki/` folder](wiki/), mirrored to the GitHub Wiki; see the Wiki section below) and in the slimmed root [README.md](README.md). Both are in the in-sync set: any behavioral change a user can observe (a settings field, a command, a provider, a self-hosting step, a limit, a default-template change) must update the relevant wiki page AND the README quick-start/links if affected, in the same change. The `wiki/` source is canonical; never hand-edit the GitHub Wiki, which is a generated mirror.
+
+**Reorganize, do not just append.** For every doc in the in-sync set (CLAUDE.md, the linked `docs/` files, the template guide, the wiki, the README), when a change touches documented behavior, first ask whether the doc's *structure* should change to absorb the new material coherently (split an overgrown page, move a topic to a better-fitting page, retitle a section, update `wiki/_Sidebar.md` and `Home.md`'s table of contents) and do that reorganization as part of the same change. Blindly appending a paragraph to the nearest section is a documented anti-pattern here; the goal is docs that stay well-organized as features accrue, not a growing pile of addenda.
+
+## Wiki
+
+User-facing documentation lives in [`wiki/`](wiki/) as one Markdown file per page. It is the canonical source; a GitHub Action ([.github/workflows/wiki-sync.yml](.github/workflows/wiki-sync.yml)) mirrors the folder to the separate `ReWrite-Voice-Notes.wiki.git` repo on every push to `master` that touches `wiki/`. The wiki repo is generated output; never edit it by hand. One-time setup (already done): the Wiki feature must be enabled and have a first page created in repo settings before the Action can push.
+
+GitHub wiki conventions: filenames become page names (spaces as hyphens, no `.md` in links), `Home.md` is the landing page, `_Sidebar.md` is the nav rail, `_Footer.md` the footer. Internal links use the page name, e.g. `[Quick start](Quick-Start)`.
+
+Page map (keep `_Sidebar.md` and `Home.md`'s contents list in sync when adding/removing pages):
+- `Home.md`, `_Sidebar.md`, `_Footer.md`: navigation.
+- `Quick-Start.md`: install, Populate, first note (Daily note example). Overlaps with the README quick-start by design.
+- `Settings-Reference.md`: every settings section (driven by [src/settings/tab.ts](src/settings/tab.ts)).
+- `Commands-and-Menus.md`: command palette, ribbon, editor/file menus, Quick Record UI ([src/main.ts](src/main.ts)).
+- `Creating-Templates.md`: template file format + authoring guide; mirrors the in-vault `Template guide.md` (note that as canonical).
+- `Providers.md`: provider tables, model selection, base-URL conventions, diarization, context hint, known nouns, recording limits.
+- `Self-Hosting-Whisper.md`: local whisper.cpp host (mirrors user-facing parts of [docs/WHISPER_HOST.md](docs/WHISPER_HOST.md)).
+- `Self-Hosting-LLMs.md`: Ollama/llama.cpp local and remote, plus low-spec model recommendations (refresh these as models age).
+- `Secrets-and-Sync.md`: encryption modes summary + the 7 sync-exclusion recipes.
+- `Mobile.md`: mobile limitations.
+- `Troubleshooting.md`: triage that routes into the per-page detail.
+
+When you move user content out of the README, it goes here, and the README's Documentation section links to it. The deep `docs/` files (DIARIZATION/SECRETS/WHISPER_HOST) stay developer-facing; the wiki summarizes their user-relevant parts and points at them where useful.
+
 ## Commands
 
 ```bash

@@ -1,0 +1,1 @@
+These pages are generated from the [`wiki/` folder in the ReWrite-Voice-Notes repo](https://github.com/WiseGuru/ReWrite-Voice-Notes/tree/master/wiki). Edits made directly in the wiki are overwritten on the next sync. To fix or improve a page, edit the matching file in `wiki/` and open a pull request.
