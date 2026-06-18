@@ -6,7 +6,7 @@ const SECRETS_FILE = 'secrets.json.nosync';
 const SECRETS_VERSION = 2;
 const VERIFIER_PLAINTEXT = 'rewrite-passphrase-verifier-v1';
 const SECRET_STORAGE_SELFTEST = 'rewrite-secretstorage-selftest';
-const SELFTEST_SECRET_ID = '__rewrite_selftest__';
+const SELFTEST_SECRET_ID = 'selftest';
 const PBKDF2_ITERATIONS = 600_000;
 const KDF_SALT_BYTES = 16;
 const AES_IV_BYTES = 12;
@@ -93,13 +93,17 @@ let unlockedKey: CryptoKey | null = null;
 // ---------- Obsidian secret storage (app.secretStorage) ----------
 
 // Prefix ids with the plugin id: app.secretStorage is shared across all installed plugins, so
-// we namespace our keys to avoid colliding with another plugin's.
+// we namespace our keys to avoid colliding with another plugin's. The separator is a DASH, not a
+// colon, because app.secretStorage.setSecret rejects any id that is not lowercase-alphanumeric +
+// dashes (it throws on a colon/underscore/uppercase). manifest.id (`rewrite-voice-notes`) and all
+// our secret ids are already dash-only, so the joined id stays valid; stripNs slices off this same
+// fixed prefix to recover the original id.
 function nsId(plugin: Plugin, id: string): string {
-	return `${plugin.manifest.id}:${id}`;
+	return `${plugin.manifest.id}-${id}`;
 }
 
 function stripNs(plugin: Plugin, nsKey: string): string | null {
-	const prefix = `${plugin.manifest.id}:`;
+	const prefix = `${plugin.manifest.id}-`;
 	return nsKey.startsWith(prefix) ? nsKey.slice(prefix.length) : null;
 }
 

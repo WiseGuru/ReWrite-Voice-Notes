@@ -68,12 +68,14 @@ export const DEFAULT_SETTINGS: GlobalSettings = {
 
 const PROFILE_KINDS: ActiveProfileKind[] = ['desktop', 'mobile'];
 
+// Secret ids must be lowercase-alphanumeric + dashes only (Obsidian's app.secretStorage.setSecret
+// throws on colons/underscores). `kind` is always 'desktop' | 'mobile', so dash-joining stays valid.
 function profileTranscriptionKeyId(kind: ActiveProfileKind): string {
-	return `profile:${kind}:transcription`;
+	return `profile-${kind}-transcription`;
 }
 
 function profileLLMKeyId(kind: ActiveProfileKind): string {
-	return `profile:${kind}:llm`;
+	return `profile-${kind}-llm`;
 }
 
 export async function loadSettings(plugin: Plugin): Promise<GlobalSettings> {
