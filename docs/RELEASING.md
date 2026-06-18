@@ -39,7 +39,7 @@ The tag name must equal `manifest.json`'s `version` exactly. `.npmrc` already pi
 1. `npm run build` passes (this is `tsc -noEmit` then esbuild production; a type error here is a release blocker).
 2. `npm run lint` passes with zero warnings. The local `eslint-plugin-obsidianmd` is looser than the official review bot, so also eyeball the conflict checklist below.
 3. Manual smoke test in a real vault for anything you touched. At minimum for a code change: record + Quick Record, run a template insert (cursor / new file / append), and on desktop start the local whisper.cpp server. Install by copying `main.js` / `manifest.json` / `styles.css` into `<Vault>/.obsidian/plugins/rewrite-voice-notes/` (folder name must match the plugin `id`) and reloading.
-4. Update docs for any behavioral change ([CLAUDE.md](../CLAUDE.md) and the user-facing template guide), per the doc-maintenance rules in CLAUDE.md.
+4. Update docs for any behavioral change ([CLAUDE.md](../CLAUDE.md), the user-facing [`wiki/`](../wiki/) pages, and the [README](../README.md)), per the doc-maintenance rules in CLAUDE.md.
 
 ## Guideline-conflict checklist (what the review bot flags)
 

@@ -26,7 +26,7 @@ Open Settings, ReWrite (Voice Notes). Configure the profile active on this devic
 
 ### 3. Populate templates
 
-In Settings, Templates, click **Populate**. This seeds `ReWrite/Templates/` with 10 starter templates, plus `SharedCore.md`, `AssistantPrompt.md`, `KnownNouns.md`, and a `Template guide.md`. It is non-destructive.
+In Settings, Templates, click **Populate**. This seeds `ReWrite/Templates/` with 10 starter templates, plus `SharedCore.md`, `AssistantPrompt.md`, and `KnownNouns.md`. It is non-destructive. The template format is documented in [Creating templates](https://github.com/WiseGuru/ReWrite-Voice-Notes/wiki/Creating-Templates).
 
 ### 4. Create your first note
 

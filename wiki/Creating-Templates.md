@@ -2,7 +2,7 @@
 
 Templates control how a transcript is cleaned and structured, and where the result goes. They are plain Markdown files in your vault, so you edit, rename, reorder, and create them like any other note.
 
-The plugin also seeds a copy of this guide into your vault as `ReWrite/Template guide.md` when you Populate. That in-vault copy is the canonical, always-current reference (it ships with the exact version of the plugin you have installed). This page mirrors it for easy browsing; if the two ever differ, trust the in-vault guide.
+This page is the canonical guide to the template format. The settings tab links here from its Templates section.
 
 ## Anatomy of a template
 

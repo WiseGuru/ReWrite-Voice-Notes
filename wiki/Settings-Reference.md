@@ -42,7 +42,7 @@ Shown on desktop only. Manages a whisper-server binary you supply for fully on-d
 
 - **Templates folder**: where the template Markdown files live (default `ReWrite/Templates`). Changing it reloads templates from the new location.
 - **Populate or update default templates**: three buttons sharing one row:
-  - **Populate**: creates any missing default templates plus `SharedCore.md` and the template guide. Non-destructive; skips anything that already exists.
+  - **Populate**: creates any missing default templates plus `SharedCore.md`. Non-destructive; skips anything that already exists. (The template format is documented in [Creating templates](Creating-Templates), not a seeded vault file.)
   - **Update**: reconciles your default-derived templates against the current built-ins with a per-field 3-way merge, and writes a `Template update report.md` for anything it cannot safely auto-merge. Recreates any default you deleted.
   - **Load prior versions**: drops earlier shipped versions of the defaults into the folder as separate, selectable templates so you can compare wording.
 - **Default template**: the template pre-selected when you open the modal.

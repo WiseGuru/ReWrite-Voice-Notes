@@ -43,9 +43,8 @@ This creates, under `ReWrite/` in your vault:
 - `ReWrite/Templates/` with 10 starter templates (General cleanup, Todo list, Daily note, Meeting notes, Meeting transcript, Idea capture, Lecture, Podcast, Guides, Book log).
 - `ReWrite/SharedCore.md`, the cleanup ground rules prepended to every template.
 - `ReWrite/AssistantPrompt.md` and `ReWrite/KnownNouns.md`, optional helpers.
-- `ReWrite/Template guide.md`, a human-facing explanation of the format (never sent to an LLM).
 
-Populate is non-destructive: re-running it only adds what is missing, so your edits are safe. To pull in changed defaults later, use **Update** instead (see [Creating templates](Creating-Templates)).
+Populate is non-destructive: re-running it only adds what is missing, so your edits are safe. To pull in changed defaults later, use **Update** instead. The full template format is documented in [Creating templates](Creating-Templates).
 
 ## 4. Create your first note (Daily note)
 

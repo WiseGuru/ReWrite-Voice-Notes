@@ -17,7 +17,6 @@ import { createLLMProvider } from '../llm';
 import { formatWhisperStatus } from '../whisper-host';
 import { loadPriorTemplateVersions, populateDefaultTemplates, updateDefaultTemplates } from '../templates-folder';
 import { populateDefaultSharedCore } from '../shared-core';
-import { populateTemplateGuide } from '../template-guide';
 import { populateDefaultAssistantPrompt } from '../assistant-prompt';
 import { populateDefaultKnownNouns } from '../known-nouns';
 import { changeEncryptionMode, EncryptionMode, lockSecrets, resetSecrets } from '../secrets';
@@ -26,6 +25,30 @@ import { PassphraseModal } from '../ui/passphrase-modal';
 
 // Sentinel value for the "Custom..." entry in a model dropdown; never written to config.model.
 const CUSTOM_MODEL_OPTION = '__rewrite_custom__';
+
+// Base URL of the project wiki. Per-section "Learn more" links point at its
+// pages so the in-app docs stay short and the long-form guidance lives in one
+// place (the wiki), rather than a help file seeded into the user's vault.
+const WIKI_BASE = 'https://github.com/WiseGuru/ReWrite-Voice-Notes/wiki';
+
+// Append an external anchor to the project wiki (a specific page, or the wiki
+// root when page is omitted). Opened in a new tab with a safe rel.
+function wikiAnchor(parent: HTMLElement, label: string, page = ''): HTMLAnchorElement {
+	const href = page ? `${WIKI_BASE}/${page}` : WIKI_BASE;
+	const a = parent.createEl('a', { text: label, href });
+	a.target = '_blank';
+	a.rel = 'noopener noreferrer';
+	return a;
+}
+
+// A standalone "Learn more" paragraph linking one wiki page, styled like the
+// other section descriptions.
+function wikiLinkParagraph(parent: HTMLElement, leadText: string, label: string, page: string): void {
+	const p = parent.createEl('p', { cls: 'rewrite-section-desc' });
+	p.appendText(leadText);
+	wikiAnchor(p, label, page);
+	p.appendText('.');
+}
 
 // Probe the locations scripts/build-whisper-linux.sh installs whisper-server to,
 // plus the common system/Homebrew paths, and return the first that exists.
@@ -116,6 +139,13 @@ export class ReWriteSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 		containerEl.addClass('rewrite-settings');
+
+		const intro = containerEl.createEl('p', { cls: 'rewrite-section-desc' });
+		intro.appendText('New to ReWrite? See the ');
+		wikiAnchor(intro, 'Quick start', 'Quick-Start');
+		intro.appendText(', or browse the full ');
+		wikiAnchor(intro, 'documentation wiki', '');
+		intro.appendText('.');
 
 		this.renderEncryption(containerEl);
 		this.renderActiveProfile(containerEl);
@@ -221,6 +251,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			text: 'Your API keys are saved in a file named secrets.json.nosync in the plugin folder. This setting picks how that file is locked.',
 			cls: 'rewrite-section-desc',
 		});
+		wikiLinkParagraph(parent, 'How keys are encrypted and how to keep the key file off device sync: ', 'Secrets and sync', 'Secrets-and-Sync');
 
 		new Setting(parent)
 			.setName('Encryption mode')
@@ -401,6 +432,8 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			details.createEl('summary', { text: 'Show settings' });
 			body = details;
 		}
+
+		wikiLinkParagraph(body, 'Choosing transcription and LLM providers, models, and base URLs: ', 'Providers', 'Providers');
 
 		new Setting(body)
 			.setName('Profile label')
@@ -745,6 +778,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			text: 'Run your own whisper-server program so your speech stays on this computer. The plugin only uses the file paths you give it. It never downloads or looks for programs on its own.',
 			cls: 'rewrite-section-desc',
 		});
+		wikiLinkParagraph(parent, 'Getting a binary, building it, the FUTO models, and troubleshooting: ', 'Self-hosting: whisper.cpp', 'Self-Hosting-Whisper');
 
 		const cfg = this.plugin.settings.localWhisper;
 
@@ -865,6 +899,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			text: 'Each template is a Markdown file in a vault folder. The text in the file is the prompt. The frontmatter holds its settings. Files show up in name order, so put a number in front of a name to set the order.',
 			cls: 'rewrite-section-desc',
 		});
+		wikiLinkParagraph(parent, 'Full guide to the template format, every frontmatter field, and writing prompts: ', 'Creating templates', 'Creating-Templates');
 
 		const s = this.plugin.settings;
 
@@ -882,7 +917,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 
 		new Setting(parent)
 			.setName('Populate or update default templates')
-			.setDesc('Populate writes the built-in templates, shared core, and guide if they are missing, skipping anything that already exists. Update reconciles your built-in-derived templates with the current defaults: it fills in new fields and properties, brings unedited prompts forward, restores any you deleted, keeps your edits, and writes a report for anything it cannot safely merge. Load prior versions drops earlier shipped versions of the prompts in as separate templates so you can compare them.')
+			.setDesc('Populate writes the built-in templates and shared core if they are missing, skipping anything that already exists. Update reconciles your built-in-derived templates with the current defaults: it fills in new fields and properties, brings unedited prompts forward, restores any you deleted, keeps your edits, and writes a report for anything it cannot safely merge. Load prior versions drops earlier shipped versions of the prompts in as separate templates so you can compare them.')
 			.addButton((b) => {
 				b.setButtonText('Populate').setCta().onClick(() => void this.runGuardedButton(b, async () => {
 					try {
@@ -892,12 +927,8 @@ export class ReWriteSettingTab extends PluginSettingTab {
 						// (it carries the guardrail + output discipline), so seed it alongside.
 						const coreCreated = await populateDefaultSharedCore(this.app, s.sharedCorePath);
 						await this.plugin.refreshSharedCore();
-						// Seed the human-facing template guide next to the templates folder.
-						// The plugin never reads it; it just teaches the template format.
-						const guideCreated = await populateTemplateGuide(this.app, s.templatesFolderPath);
 						const coreNote = coreCreated ? ` Created ${s.sharedCorePath}.` : '';
-						const guideNote = guideCreated ? ' Added the template guide.' : '';
-						new Notice(`ReWrite: populated ${result.folder}. Created ${result.created}, skipped ${result.skipped}.${coreNote}${guideNote}`);
+						new Notice(`ReWrite: populated ${result.folder}. Created ${result.created}, skipped ${result.skipped}.${coreNote}`);
 						this.display();
 					} catch (e) {
 						console.error('ReWrite: populate templates failed', e);
