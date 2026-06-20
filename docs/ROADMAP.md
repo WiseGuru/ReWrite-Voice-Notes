@@ -43,6 +43,16 @@ Voxtral exposes a real-time STT model that doesn't accept whole-file uploads, an
 
 Merged to `master`, not yet tagged. These become the next version's release notes.
 
+_Nothing yet._
+
+---
+
+## Released
+
+> Per-version attribution starts with the first release cut after this roadmap was adopted. The archive below collects work that shipped across **1.0.0 through 1.1.0** before per-version tracking began; it is grouped as one historical block rather than retro-fitted to individual tags. New releases get their own `### <version> — <date>` heading above this archive.
+
+### 1.1.1 — 2026-06-19
+
 ### Fix: recording the modal now closes on Stop and reports via notices, instead of holding the modal open
 
 The main modal's **Record** tab used to keep the popup open after Stop, showing an inline "Working... / Transcribing..." line (and an inline **Retry** button on error) while the transcribe → cleanup → insert pipeline ran. It now closes the modal the moment recording stops and runs the pipeline detached, reporting progress through a sticky `Notice` (`setMessage` per stage: "ReWrite: Saving audio... / Transcribing... / Cleaning up... / Inserting...") and surfacing errors as a `Notice` — the same UX as reprocessing a saved file ([src/ui/audio-source.ts](../src/ui/audio-source.ts) `runAudioFilePipeline`). New private method `startRecordingPipeline(source)` in [src/ui/modal.ts](../src/ui/modal.ts) captures `profile` / `destinationOverride` / `contextHint` into locals, calls `this.close()`, then runs `runPipeline` inside a detached async IIFE. Safe because the `persist-audio` stage writes the recording to the vault before transcription, so the saved file is the recovery path on error (no inline Retry needed). **Paste** and **From note** keep the prior in-modal `execute` flow (inline progress + Retry), since their input is not persisted and closing would lose it. Docs updated in [CLAUDE.md](../CLAUDE.md) (Pipeline section) and [wiki/Commands-and-Menus.md](../wiki/Commands-and-Menus.md) (The main modal).
@@ -54,12 +64,6 @@ Two coupled bugs in the secrets bootstrap, both surfacing as "I can't create a p
 **Probe ordering ([src/main.ts](../src/main.ts)).** `loadSettings()` runs `hydrateSecrets → loadAllKeys → ensureEnvelope`, which reads and caches the secrets envelope for the session. That ran *before* `warmSecretStorage()`, so on a fresh install the availability probe was still cold and `defaultEnvelope()` fell back to `'passphrase'` instead of `'secretStorage'`. Reordered `onload` so `warmSecretStorage(this)` runs before `loadSettings(this)`; a fresh install now correctly defaults to Obsidian secret storage when the OS store is available, not just labels it "recommended."
 
 **`setEncryptionMode` early-return ([src/secrets.ts](../src/secrets.ts)).** Because the envelope had cached as unconfigured `passphrase` mode, the create-passphrase flow called `setEncryptionMode(plugin, 'passphrase', pass)`, hit the blanket `if (envelope.mode === newMode) return;`, and silently did nothing — no kdf/verifier built, no `secrets.json.nosync` written. The modal reported success (onSubmit never threw) while status stayed unconfigured/locked, hence "set a passphrase first." Replaced the blanket guard with per-branch logic: secretStorage no-ops only if already active; configured passphrase flips mode only if not already active; an unconfigured passphrase store (no kdf/verifier) always builds a fresh envelope, *even when `mode` is already `passphrase`*. This also fixes a latent bug where a genuine Linux-without-keyring user (correctly defaulting to passphrase) could never create one through that path. Docs updated in [docs/SECRETS.md](SECRETS.md) (the `setEncryptionMode` model, the `warmSecretStorage` ordering note, and the probe gotcha).
-
----
-
-## Released
-
-> Per-version attribution starts with the first release cut after this roadmap was adopted. The archive below collects work that shipped across **1.0.0 through 1.1.0** before per-version tracking began; it is grouped as one historical block rather than retro-fitted to individual tags. New releases get their own `### <version> — <date>` heading above this archive.
 
 ### 1.1.0 and earlier (historical archive, not tracked per-version)
 
