@@ -9,10 +9,12 @@ Releases are automated by [.github/workflows/release.yml](../.github/workflows/r
 ```bash
 # 0. On master, clean working tree, everything you want shipped is committed.
 npm run build && npm run lint          # must both pass
+# 0a. Roll docs/ROADMAP.md: move the Unreleased items into a new
+#     "### <version> — <YYYY-MM-DD>" block under Released, leave Unreleased empty.
 # 1. Bump version files (no auto commit/tag so we control the message)
 npm version patch --no-git-tag-version # or minor / major
-# 2. Commit the bump
-git add manifest.json package.json package-lock.json versions.json
+# 2. Commit the bump (include the rolled roadmap)
+git add manifest.json package.json package-lock.json versions.json docs/ROADMAP.md
 git commit -m "1.0.1"                  # use the new version as the subject
 # 3. Tag with the BARE version (no leading v) and push
 git tag -a 1.0.1 -m "Release 1.0.1"
@@ -40,6 +42,7 @@ The tag name must equal `manifest.json`'s `version` exactly. `.npmrc` already pi
 2. `npm run lint` passes with zero warnings. The local `eslint-plugin-obsidianmd` is looser than the official review bot, so also eyeball the conflict checklist below.
 3. Manual smoke test in a real vault for anything you touched. At minimum for a code change: record + Quick Record, run a template insert (cursor / new file / append), and on desktop start the local whisper.cpp server. Install by copying `main.js` / `manifest.json` / `styles.css` into `<Vault>/.obsidian/plugins/rewrite-voice-notes/` (folder name must match the plugin `id`) and reloading.
 4. Update docs for any behavioral change ([CLAUDE.md](../CLAUDE.md), the user-facing [`wiki/`](../wiki/) pages, and the [README](../README.md)), per the doc-maintenance rules in CLAUDE.md.
+5. Roll [ROADMAP.md](ROADMAP.md): every item shipping in this release should already have an **Unreleased** entry. Move them into a new `### <version> — <YYYY-MM-DD>` heading at the top of the **Released** archive, and leave `## Unreleased` empty for the next cycle. The version + date must match the tag.
 
 ## Guideline-conflict checklist (what the review bot flags)
 

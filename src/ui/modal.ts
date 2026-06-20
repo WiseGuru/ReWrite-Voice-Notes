@@ -356,7 +356,7 @@ export class ReWriteModal extends Modal {
 					dot.hide();
 					warning.hide();
 					this.stopTimerLoop();
-					await this.execute(source);
+					this.startRecordingPipeline(source);
 				} catch (e) {
 					new Notice(e instanceof Error ? e.message : String(e));
 					isRecording = false;
@@ -452,6 +452,49 @@ export class ReWriteModal extends Modal {
 		this.stopTimerLoop();
 		this.recorder?.cancel();
 		this.recorder = null;
+	}
+
+	// Recorded-audio path: close the modal immediately and run the pipeline detached, reporting
+	// progress and errors through a Notice (mirrors runAudioFilePipeline). The recording is
+	// persisted to the vault before transcription, so the saved file is the recovery path on
+	// error; no inline Retry is needed. Paste / From note keep execute()'s in-modal flow because
+	// they have no persisted recovery.
+	private startRecordingPipeline(source: PipelineSource): void {
+		const template = this.activeTemplate();
+		if (!template) {
+			new Notice('Please pick a template.');
+			return;
+		}
+		const { profile } = resolveActiveProfile(this.plugin.settings);
+		const destinationOverride = this.destinationOverride ?? undefined;
+		const contextHint = this.contextHint.trim() || undefined;
+		const plugin = this.plugin;
+		const app = this.app;
+		this.close();
+
+		const progress = new Notice('ReWrite: working...', 0);
+		void (async () => {
+			try {
+				await runPipeline({
+					app,
+					settings: plugin.settings,
+					host: plugin,
+					profile,
+					template,
+					source,
+					destinationOverride,
+					contextHint,
+					onStage: (stage) => progress.setMessage(`ReWrite: ${stageLabel(stage)}`),
+				});
+				progress.hide();
+				plugin.settings.lastUsedTemplateId = template.id;
+				await plugin.saveSettings();
+				new Notice('ReWrite complete.');
+			} catch (e) {
+				progress.hide();
+				new Notice(`ReWrite: ${e instanceof Error ? e.message : String(e)}`);
+			}
+		})();
 	}
 
 	private async execute(source: PipelineSource): Promise<void> {

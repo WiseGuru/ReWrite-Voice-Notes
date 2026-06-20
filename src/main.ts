@@ -31,10 +31,12 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 	private unlockListeners = new Set<() => void>();
 
 	async onload(): Promise<void> {
-		this.settings = await loadSettings(this);
-		// Warm the secret-storage probe before reading status so a first run (no envelope yet)
-		// can default to secret storage when it is available.
+		// Warm the secret-storage probe BEFORE anything reads the secrets envelope. loadSettings ->
+		// hydrateSecrets reads (and caches) the envelope, so the probe must be warm first; otherwise
+		// a first run (no envelope yet) caches as unconfigured passphrase mode and never picks up
+		// secret storage even when it is available.
 		await warmSecretStorage(this);
+		this.settings = await loadSettings(this);
 		this.encryptionStatus = await getEncryptionStatus(this);
 		this.whisperHost = new WhisperHost(this);
 		bindWhisperHost(this.whisperHost);

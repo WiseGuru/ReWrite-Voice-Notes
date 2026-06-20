@@ -34,6 +34,8 @@ Opened by the ribbon icon or the Open command. It has:
 - A collapsible **Context** field, shown only for templates that enable it, for one-off background info (speakers, subject, setting). See [Providers](Providers).
 - An inline **setup card** that blocks recording or pasting until the active profile is configured, with a shortcut to fix it.
 
+When you **Record** and press Stop, the modal closes right away and the rest of the work (transcribe, clean up, insert) runs in the background with progress shown via notices, the same as reprocessing a saved file. If something fails, a notice tells you why; your recording was already saved to the vault, so you can reprocess it. The **Paste** and **From note** tabs instead keep the modal open while they run and offer a **Retry** button on error, since their input is not saved anywhere.
+
 ## Quick Record floating UI
 
 Quick Record skips the modal entirely. When you start it, a small floating panel appears with:

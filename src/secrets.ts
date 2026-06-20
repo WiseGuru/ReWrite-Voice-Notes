@@ -681,9 +681,9 @@ export async function setEncryptionMode(
 	newPassphrase?: string,
 ): Promise<void> {
 	const envelope = await ensureEnvelope(plugin);
-	if (envelope.mode === newMode) return;
 
 	if (newMode === 'secretStorage') {
+		if (envelope.mode === 'secretStorage') return; // already active
 		if (!(await probeSecretStorage(plugin))) {
 			throw new Error('Obsidian secret storage is not available on this device.');
 		}
@@ -695,11 +695,18 @@ export async function setEncryptionMode(
 
 	// newMode === 'passphrase'
 	if (envelope.kdf && envelope.verifier) {
-		// Passphrase store already configured: just make it active. It is locked until the user
-		// unlocks (unless unlockedKey is still held from this session). No rebuild, no transfer.
-		await writeEnvelope(plugin, { ...envelope, version: SECRETS_VERSION, mode: 'passphrase' });
+		// Passphrase store already configured: make it active if it isn't. It is locked until the
+		// user unlocks (unless unlockedKey is still held from this session). No rebuild, no transfer.
+		if (envelope.mode !== 'passphrase') {
+			await writeEnvelope(plugin, { ...envelope, version: SECRETS_VERSION, mode: 'passphrase' });
+		}
 		return;
 	}
+
+	// Passphrase store NOT configured yet (no kdf/verifier). Fall through to build a fresh envelope
+	// below even when envelope.mode is already 'passphrase' (the first-run/no-keyring default): a
+	// blanket `mode === newMode` early-return here would silently skip creation and leave the store
+	// unconfigured, so the create-passphrase flow must reach writePassphraseEnvelope.
 
 	// Passphrase store not configured yet: a new passphrase is required to create it.
 	if (!newPassphrase || newPassphrase.length === 0) {
