@@ -35,6 +35,10 @@ export interface EncryptionStatus {
 	// Obsidian's app.secretStorage exists (>= 1.11.4) AND a round-trip self-test passes, so a
 	// device with no working OS secret store (e.g. Linux without a keyring) reads false here.
 	secretStorageAvailable: boolean;
+	// The passphrase store has a complete kdf+verifier on disk, INDEPENDENT of the active mode.
+	// Lets the UI tell a switch-to-passphrase (just activate) from a create-passphrase (prompt for
+	// a new one), and whether a secretStorage-active user has a passphrase snapshot to copy.
+	passphraseConfigured: boolean;
 }
 
 type KdfAlgo = 'pbkdf2' | 'argon2id';
@@ -282,15 +286,15 @@ function parseEnvelope(raw: string): SecretsEnvelope {
 	}
 	const keys = isObject(parsed.keys) ? parsed.keys as Record<string, string> : {};
 	const envelope: SecretsEnvelope = { version, mode, keys };
-	if (mode === 'passphrase') {
-		const kdf = parseKdf(parsed.kdf);
-		const verifier = typeof parsed.verifier === 'string' ? parsed.verifier : undefined;
-		// Only a complete kdf+verifier pair counts as configured; otherwise the
-		// envelope is treated as unconfigured (prompt to create a passphrase).
-		if (kdf && verifier) {
-			envelope.kdf = kdf;
-			envelope.verifier = verifier;
-		}
+	// Retain passphrase material (kdf/verifier/keys) whenever present, REGARDLESS of the active
+	// mode. The two stores coexist: when secretStorage is active, the passphrase kdf/verifier/keys
+	// are a preserved-at-rest snapshot (active keys live in the OS store). Only a complete
+	// kdf+verifier pair counts as a configured passphrase store.
+	const kdf = parseKdf(parsed.kdf);
+	const verifier = typeof parsed.verifier === 'string' ? parsed.verifier : undefined;
+	if (kdf && verifier) {
+		envelope.kdf = kdf;
+		envelope.verifier = verifier;
 	}
 	return envelope;
 }
@@ -487,15 +491,6 @@ async function decryptAllToPlain(envelope: SecretsEnvelope): Promise<Record<stri
 	return plain;
 }
 
-// Read every stored key to plaintext regardless of mode: secretStorage lists the store and
-// strips our namespace; passphrase decrypts the envelope. Used by mode transitions.
-async function readAllPlain(plugin: Plugin, envelope: SecretsEnvelope): Promise<Record<string, string>> {
-	if (envelope.mode === 'secretStorage') {
-		return readAllFromSecretStorage(plugin);
-	}
-	return decryptAllToPlain(envelope);
-}
-
 // Write a freshly-built passphrase envelope (kdf + verifier) and re-encrypt `plain`
 // under the new key. Sets unlockedKey. Used by mode change, change-passphrase, and
 // the unlock-time KDF upgrade. Does NOT enforce entropy (the caller does, when needed).
@@ -538,11 +533,13 @@ async function tryUpgradeToArgon2id(plugin: Plugin, passphrase: string): Promise
 
 export async function getEncryptionStatus(plugin: Plugin): Promise<EncryptionStatus> {
 	const envelope = await ensureEnvelope(plugin);
+	const passphraseConfigured = envelope.kdf != null && envelope.verifier != null;
 	return {
 		mode: envelope.mode,
 		locked: envelope.mode === 'passphrase' && unlockedKey === null,
-		configured: envelope.mode !== 'passphrase' || (envelope.kdf != null && envelope.verifier != null),
+		configured: envelope.mode !== 'passphrase' || passphraseConfigured,
 		secretStorageAvailable: await probeSecretStorage(plugin),
+		passphraseConfigured,
 	};
 }
 
@@ -550,9 +547,12 @@ export function lockSecrets(): void {
 	unlockedKey = null;
 }
 
-export async function unlockSecrets(plugin: Plugin, passphrase: string): Promise<boolean> {
+// Derive + verify the passphrase store's key from the on-disk envelope, REGARDLESS of which
+// mode is active, and cache it in unlockedKey. This lets a secretStorage-active user unlock the
+// passphrase snapshot in order to copy it. Returns false on an unconfigured store or a wrong
+// passphrase; throws a clear message on an Argon2id allocation failure.
+export async function unlockPassphraseStore(plugin: Plugin, passphrase: string): Promise<boolean> {
 	const envelope = await ensureEnvelope(plugin);
-	if (envelope.mode !== 'passphrase') return true;
 	if (!envelope.kdf || !envelope.verifier) return false;
 	let candidate: CryptoKey;
 	try {
@@ -573,9 +573,10 @@ export async function unlockSecrets(plugin: Plugin, passphrase: string): Promise
 		return false;
 	}
 	unlockedKey = candidate;
-	// Opportunistically migrate legacy PBKDF2 envelopes to Argon2id while we hold the
-	// passphrase. Best-effort: failures leave the envelope (and unlockedKey) on PBKDF2.
-	if (envelope.kdf.algo === 'pbkdf2') {
+	// Opportunistically migrate legacy PBKDF2 envelopes to Argon2id while we hold the passphrase.
+	// Only when passphrase is the ACTIVE store (tryUpgradeToArgon2id rewrites a passphrase
+	// envelope, which would clobber an active secretStorage envelope's mode). Best-effort.
+	if (envelope.mode === 'passphrase' && envelope.kdf.algo === 'pbkdf2') {
 		try {
 			await tryUpgradeToArgon2id(plugin, passphrase);
 		} catch {
@@ -583,6 +584,12 @@ export async function unlockSecrets(plugin: Plugin, passphrase: string): Promise
 		}
 	}
 	return true;
+}
+
+export async function unlockSecrets(plugin: Plugin, passphrase: string): Promise<boolean> {
+	const envelope = await ensureEnvelope(plugin);
+	if (envelope.mode !== 'passphrase') return true;
+	return unlockPassphraseStore(plugin, passphrase);
 }
 
 export async function saveKey(plugin: Plugin, id: string, key: string): Promise<void> {
@@ -653,48 +660,110 @@ export async function loadAllKeys(plugin: Plugin): Promise<Record<string, string
 	return decryptAllToPlain(envelope);
 }
 
-// ---------- mode transitions ----------
+// ---------- mode switch / copy / clear ----------
 
-export async function changeEncryptionMode(
+// Count the keys stored under a method, without decrypting (passphrase) or transferring. Drives
+// the settings UI (whether Migrate has a source, how many keys Clear will wipe).
+export async function countStoredKeys(plugin: Plugin, mode: EncryptionMode): Promise<number> {
+	if (mode === 'secretStorage') {
+		return Object.keys(await readAllFromSecretStorage(plugin)).length;
+	}
+	const envelope = await ensureEnvelope(plugin);
+	return Object.values(envelope.keys).filter((v) => typeof v === 'string' && v !== '').length;
+}
+
+// Switch the ACTIVE encryption method WITHOUT transferring any keys. Keys saved under the other
+// method are preserved at rest (passphrase kdf/verifier/keys stay in the envelope; secretStorage
+// entries stay in the OS store). Use copyKeys() to copy them over.
+export async function setEncryptionMode(
 	plugin: Plugin,
 	newMode: EncryptionMode,
 	newPassphrase?: string,
 ): Promise<void> {
 	const envelope = await ensureEnvelope(plugin);
-	if (envelope.mode === newMode && newMode !== 'passphrase') return;
-	if (envelope.mode === 'passphrase' && unlockedKey === null && envelope.kdf) {
-		throw new Error('Unlock secrets with the current passphrase before changing modes.');
-	}
-	if (newMode === 'secretStorage' && !(await probeSecretStorage(plugin))) {
-		throw new Error('Obsidian secret storage is not available on this device.');
-	}
-	if (newMode === 'passphrase') {
-		if (!newPassphrase || newPassphrase.length === 0) {
-			throw new Error('A passphrase is required to switch to passphrase mode.');
-		}
-		if (!(await isPassphraseAcceptable(newPassphrase))) {
-			throw new Error('Passphrase is too weak. Use a longer, more unique passphrase (try the Generate button).');
-		}
-	}
+	if (envelope.mode === newMode) return;
 
-	const plain = await readAllPlain(plugin, envelope);
-	const wasSecretStorage = envelope.mode === 'secretStorage';
-
-	if (newMode === 'passphrase') {
-		await writePassphraseEnvelope(plugin, newPassphrase ?? '', plain);
-		if (wasSecretStorage) await clearSecretStorage(plugin);
+	if (newMode === 'secretStorage') {
+		if (!(await probeSecretStorage(plugin))) {
+			throw new Error('Obsidian secret storage is not available on this device.');
+		}
+		// Flip the active mode; keep kdf/verifier/keys (the now-inactive passphrase snapshot) and
+		// the in-memory unlockedKey so a later passphrase->secretStorage copy needs no re-prompt.
+		await writeEnvelope(plugin, { ...envelope, version: SECRETS_VERSION, mode: 'secretStorage' });
 		return;
 	}
 
-	// secretStorage: write each value to the OS-backed store, then record the mode in a minimal
-	// envelope (the keys map stays empty; values live in app.secretStorage, not on disk).
-	unlockedKey = null;
-	for (const id of Object.keys(plain)) {
-		await writeToSecretStorage(plugin, id, plain[id] ?? '');
+	// newMode === 'passphrase'
+	if (envelope.kdf && envelope.verifier) {
+		// Passphrase store already configured: just make it active. It is locked until the user
+		// unlocks (unless unlockedKey is still held from this session). No rebuild, no transfer.
+		await writeEnvelope(plugin, { ...envelope, version: SECRETS_VERSION, mode: 'passphrase' });
+		return;
 	}
-	const next: SecretsEnvelope = { version: SECRETS_VERSION, mode: 'secretStorage', keys: {} };
-	cachedEnvelope = next;
-	await writeEnvelope(plugin, next);
+
+	// Passphrase store not configured yet: a new passphrase is required to create it.
+	if (!newPassphrase || newPassphrase.length === 0) {
+		throw new Error('A passphrase is required to switch to passphrase mode.');
+	}
+	if (!(await isPassphraseAcceptable(newPassphrase))) {
+		throw new Error('Passphrase is too weak. Use a longer, more unique passphrase (try the Generate button).');
+	}
+	// Build a fresh, empty passphrase envelope (becomes the active mode). Any secretStorage keys
+	// stay untouched in the OS store; the user can copy them in afterwards.
+	await writePassphraseEnvelope(plugin, newPassphrase, {});
+}
+
+// Copy keys FROM the inactive method INTO the currently active method. The source is NOT deleted
+// (use clearKeys for that), so this is a copy, not a move. Same-named ids in the target are
+// overwritten; other target ids are left intact. Returns the number of keys written. The caller
+// must have unlocked the passphrase store first whenever passphrase is the source or target
+// (encrypt/decrypt needs unlockedKey).
+export async function copyKeys(plugin: Plugin): Promise<number> {
+	const envelope = await ensureEnvelope(plugin);
+	const source: EncryptionMode = envelope.mode === 'secretStorage' ? 'passphrase' : 'secretStorage';
+
+	let sourcePlain: Record<string, string>;
+	if (source === 'secretStorage') {
+		sourcePlain = await readAllFromSecretStorage(plugin);
+	} else {
+		if (!envelope.kdf || !envelope.verifier) return 0; // no passphrase store to copy from
+		if (unlockedKey === null) {
+			throw new Error('Unlock the passphrase store before copying its keys.');
+		}
+		sourcePlain = await decryptAllToPlain(envelope);
+	}
+
+	const ids = Object.keys(sourcePlain).filter((id) => sourcePlain[id]);
+	if (ids.length === 0) return 0;
+
+	if (envelope.mode === 'secretStorage') {
+		for (const id of ids) {
+			await writeToSecretStorage(plugin, id, sourcePlain[id] ?? '');
+		}
+	} else {
+		if (unlockedKey === null) {
+			throw new Error('Unlock the passphrase store before copying keys into it.');
+		}
+		for (const id of ids) {
+			envelope.keys[id] = await encryptValue(sourcePlain[id] ?? '');
+		}
+		await writeEnvelope(plugin, envelope);
+	}
+	return ids.length;
+}
+
+// Permanently delete every key saved under a method. secretStorage: remove our namespaced OS
+// entries. passphrase: drop kdf/verifier/keys from the envelope (rendering it unconfigured) and
+// forget the in-memory key. Does not change the active mode.
+export async function clearKeys(plugin: Plugin, mode: EncryptionMode): Promise<void> {
+	const envelope = await ensureEnvelope(plugin);
+	if (mode === 'secretStorage') {
+		await clearSecretStorage(plugin);
+		return;
+	}
+	// passphrase: strip all passphrase material, keep the active mode flag as-is.
+	unlockedKey = null;
+	await writeEnvelope(plugin, { version: SECRETS_VERSION, mode: envelope.mode, keys: {} });
 }
 
 // Forgot-passphrase recovery. Discards all existing key material (the old keys are
@@ -714,6 +783,8 @@ export async function resetSecrets(plugin: Plugin, newPassphrase: string): Promi
 	await writePassphraseEnvelope(plugin, newPassphrase, {});
 }
 
+// Re-encrypt the existing passphrase keys under a new passphrase (a within-passphrase re-key, not
+// a cross-mode transfer). Requires passphrase to be the active mode and currently unlocked.
 export async function changePassphrase(plugin: Plugin, newPassphrase: string): Promise<void> {
 	const envelope = await ensureEnvelope(plugin);
 	if (envelope.mode !== 'passphrase') {
@@ -725,5 +796,9 @@ export async function changePassphrase(plugin: Plugin, newPassphrase: string): P
 	if (newPassphrase.length === 0) {
 		throw new Error('Passphrase cannot be empty.');
 	}
-	await changeEncryptionMode(plugin, 'passphrase', newPassphrase);
+	if (!(await isPassphraseAcceptable(newPassphrase))) {
+		throw new Error('Passphrase is too weak. Use a longer, more unique passphrase (try the Generate button).');
+	}
+	const plain = await decryptAllToPlain(envelope);
+	await writePassphraseEnvelope(plugin, newPassphrase, plain);
 }

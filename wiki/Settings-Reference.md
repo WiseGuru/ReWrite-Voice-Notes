@@ -6,7 +6,9 @@ This page walks through every section of the plugin's settings tab (Settings, Re
 
 Controls how your provider API keys are encrypted at rest. There is no unencrypted option.
 
-- **Encryption mode**: choose between **Obsidian secret storage** (the default when your Obsidian version and OS support it; keys live in the OS keychain) and **Passphrase** (AES-GCM with a key derived from a passphrase via Argon2id, or PBKDF2 where Argon2id is unavailable). A status badge next to the section heading shows the active mode and whether it is currently unlocked.
+- **Encryption mode**: choose between **Obsidian secret storage** (the default when your Obsidian version and OS support it; keys live in the OS keychain) and **Passphrase** (AES-GCM with a key derived from a passphrase via Argon2id, or PBKDF2 where Argon2id is unavailable). Switching here changes the *active* method only and **does not move your keys** (the two methods can hold keys at once).
+- **Copy keys from &lt;other method&gt;**: duplicates the keys saved under the inactive method into the active one, leaving the originals in place. Shown only when the other method has keys; you confirm the copy (and enter the passphrase when copying from the passphrase store), and a notice reports the count.
+- **Clear keys in &lt;method&gt;**: permanently deletes the keys saved under the selected method, behind a confirmation. Shown only when that method has keys.
 - **Change passphrase**: set or rotate the passphrase (passphrase mode only). The plugin enforces a minimum strength and offers a one-click 6-word generator.
 - **Lock now**: clears the derived key from memory (passphrase mode). The next pipeline run prompts you to unlock.
 

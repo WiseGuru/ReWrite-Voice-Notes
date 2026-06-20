@@ -17,7 +17,7 @@ import { isPathInTemplatesFolder, loadTemplatesFromFolder } from './templates-fo
 import { isPathSharedCore, loadSharedCoreFromFile } from './shared-core';
 import { isPathAssistantPrompt, loadAssistantPromptFromFile } from './assistant-prompt';
 import { isPathKnownNouns, loadKnownNounsFromFile } from './known-nouns';
-import { changeEncryptionMode, EncryptionStatus, getEncryptionStatus, unlockSecrets, warmSecretStorage } from './secrets';
+import { setEncryptionMode, EncryptionStatus, getEncryptionStatus, unlockSecrets, warmSecretStorage } from './secrets';
 
 export default class ReWritePlugin extends Plugin implements PipelineHost {
 	settings!: GlobalSettings;
@@ -214,7 +214,7 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 				requireConfirm: true,
 				enforceStrength: true,
 				onSubmit: async (pass) => {
-					await changeEncryptionMode(this, 'passphrase', pass);
+					await setEncryptionMode(this, 'passphrase', pass);
 					await hydrateSecrets(this, this.settings);
 					await this.refreshEncryptionStatus();
 					this.notifySecretsUnlocked();

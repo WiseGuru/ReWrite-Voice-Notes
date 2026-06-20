@@ -1,6 +1,6 @@
 {
 	"name": "rewrite-voice-notes",
-	"version": "1.0.3",
+	"version": "1.1.0",
 	"description": "Record or paste speech and have it transcribed and structured by AI.",
 	"main": "main.js",
 	"type": "module",

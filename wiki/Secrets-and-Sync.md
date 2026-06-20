@@ -15,7 +15,18 @@ The plugin encrypts keys at rest in one of two modes, selectable in Settings und
 
 Passphrase mode locks and unlocks: **Lock now** clears the derived key from memory, and the next pipeline run prompts you to unlock. The derived key never touches disk.
 
-The deeper implementation detail (envelope schema, KDF parameters, migration) is developer-facing and lives in the repo's `docs/SECRETS.md`.
+### Switching, copying, and clearing keys
+
+Switching the **Encryption mode** dropdown changes which method is *active* but **does not move your keys**. The two methods can hold keys at the same time, so a switch is safe and reversible: keys saved under the other method stay where they are (the passphrase file keeps its encrypted snapshot; secret-storage keys stay in your OS keychain). The newly active method may simply show no keys until you copy or re-enter them.
+
+Two explicit buttons handle the key material, each behind a confirmation:
+
+- **Copy keys from &lt;other method&gt;** duplicates the keys saved under the *inactive* method into the *active* one. The originals are kept (use Clear to remove them). When the source is the passphrase store, you are prompted for that passphrase first. A notice reports how many keys were copied.
+- **Clear keys in &lt;method&gt;** permanently deletes the keys saved under the selected method. Clearing the active passphrase store leaves it unconfigured, so you would set a passphrase again (or switch methods) before saving more keys.
+
+A typical move from passphrase to secret storage: switch the dropdown to **Obsidian secret storage**, click **Copy** (enter your passphrase when asked), confirm, then optionally **Clear** the passphrase store once you have verified everything works.
+
+The deeper implementation detail (envelope schema, KDF parameters, the switch/copy/clear model) is developer-facing and lives in the repo's `docs/SECRETS.md`.
 
 ## Excluding `secrets.json.nosync` from sync
 

@@ -19,9 +19,21 @@ import { loadPriorTemplateVersions, populateDefaultTemplates, updateDefaultTempl
 import { populateDefaultSharedCore } from '../shared-core';
 import { populateDefaultAssistantPrompt } from '../assistant-prompt';
 import { populateDefaultKnownNouns } from '../known-nouns';
-import { changeEncryptionMode, EncryptionMode, lockSecrets, resetSecrets } from '../secrets';
+import {
+	changePassphrase,
+	clearKeys,
+	copyKeys,
+	countStoredKeys,
+	EncryptionMode,
+	EncryptionStatus,
+	lockSecrets,
+	resetSecrets,
+	setEncryptionMode,
+	unlockPassphraseStore,
+} from '../secrets';
 import { hydrateSecrets } from '.';
 import { PassphraseModal } from '../ui/passphrase-modal';
+import { ConfirmModal } from '../ui/confirm-modal';
 
 // Sentinel value for the "Custom..." entry in a model dropdown; never written to config.model.
 const CUSTOM_MODEL_OPTION = '__rewrite_custom__';
@@ -48,6 +60,13 @@ function wikiLinkParagraph(parent: HTMLElement, leadText: string, label: string,
 	p.appendText(leadText);
 	wikiAnchor(p, label, page);
 	p.appendText('.');
+}
+
+// Human-readable name for an encryption method, used in the Migrate/Clear copy. Passphrase is
+// lowercased mid-sentence and capitalized when it starts a sentence (via the `capitalize` arg).
+function modeLabel(mode: EncryptionMode, capitalize = false): string {
+	if (mode === 'secretStorage') return 'Obsidian secret storage';
+	return capitalize ? 'Passphrase' : 'passphrase';
 }
 
 // Probe the locations scripts/build-whisper-linux.sh installs whisper-server to,
@@ -265,9 +284,18 @@ export class ReWriteSettingTab extends PluginSettingTab {
 				dd.onChange((v) => {
 					const next = v as EncryptionMode;
 					if (next === status.mode) return;
-					void this.handleModeChange(next);
+					void this.handleSwitchMode(next);
 				});
 			});
+
+		// Switching the mode above does NOT move keys. Copy (duplicate other -> active) and Clear
+		// (wipe a method) are explicit, separate actions, rendered into this container once their
+		// async key counts resolve. Gated on an unlocked active store: a locked or unconfigured
+		// passphrase is handled by the banner's Unlock / Set passphrase button instead.
+		if (!status.locked) {
+			const transferEl = parent.createDiv();
+			void this.renderKeyTransferControls(transferEl, status);
+		}
 
 		if (status.mode === 'passphrase' && !status.locked) {
 			new Setting(parent)
@@ -283,7 +311,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 							requireConfirm: true,
 							enforceStrength: true,
 							onSubmit: async (pass) => {
-								await changeEncryptionMode(this.plugin, 'passphrase', pass);
+								await changePassphrase(this.plugin, pass);
 								await this.plugin.refreshEncryptionStatus();
 								new Notice('ReWrite: passphrase updated.');
 								this.display();
@@ -304,6 +332,153 @@ export class ReWriteSettingTab extends PluginSettingTab {
 					}));
 				});
 		}
+	}
+
+	// Render the Migrate and Clear rows once the per-method key counts resolve. Appended async
+	// because display() is synchronous; the rows pop into `parent` a tick later.
+	private async renderKeyTransferControls(parent: HTMLElement, status: EncryptionStatus): Promise<void> {
+		const active = status.mode;
+		const other: EncryptionMode = active === 'secretStorage' ? 'passphrase' : 'secretStorage';
+		const [activeCount, otherCount] = await Promise.all([
+			countStoredKeys(this.plugin, active),
+			countStoredKeys(this.plugin, other),
+		]);
+
+		if (activeCount === 0 && otherCount > 0) {
+			const hint = parent.createDiv({ cls: 'rewrite-encryption-banner is-warning' });
+			hint.createEl('span', {
+				text: `${modeLabel(active, true)} has no saved keys yet. Use the Copy button to bring your ${otherCount} key(s) over from ${modeLabel(other)}, or enter them above.`,
+			});
+		}
+
+		if (otherCount > 0) {
+			new Setting(parent)
+				.setName(`Copy keys from ${modeLabel(other)}`)
+				.setDesc(`Copies your ${otherCount} saved key(s) from ${modeLabel(other)} into ${modeLabel(active)}. The originals are kept; use Clear to remove them.`)
+				.addButton((b) => {
+					b.setButtonText('Copy').onClick(() => void this.handleCopy());
+				});
+		}
+
+		if (activeCount > 0) {
+			new Setting(parent)
+				.setName(`Clear keys in ${modeLabel(active)}`)
+				.setDesc(`Permanently deletes the ${activeCount} key(s) saved under ${modeLabel(active)}. This cannot be undone.`)
+				.addButton((b) => {
+					b.setButtonText('Clear').setWarning().onClick(() => this.handleClear(active, activeCount));
+				});
+		}
+	}
+
+	// Switch the ACTIVE encryption method without moving any keys (Migrate does that). Switching to
+	// an unconfigured passphrase store prompts for a new passphrase; switching to an already
+	// configured one just activates it (locked until the user unlocks).
+	private async handleSwitchMode(next: EncryptionMode): Promise<void> {
+		if (this.modeChangeInFlight) return;
+		this.modeChangeInFlight = true;
+		try {
+			if (next === 'passphrase' && !this.plugin.encryptionStatus.passphraseConfigured) {
+				new PassphraseModal({
+					app: this.app,
+					title: 'Set a passphrase',
+					description: 'A passphrase will encrypt your API keys. Store it in your password manager; there is no recovery if you forget it. This does not move keys saved under Obsidian secret storage; use Copy for that.',
+					confirmLabel: 'Save',
+					requireConfirm: true,
+					enforceStrength: true,
+					onSubmit: async (pass) => {
+						await setEncryptionMode(this.plugin, 'passphrase', pass);
+						await hydrateSecrets(this.plugin, this.plugin.settings);
+						await this.plugin.refreshEncryptionStatus();
+						this.plugin.notifySecretsUnlocked();
+						new Notice('ReWrite: passphrase encryption enabled.');
+						this.display();
+					},
+				}).open();
+				// Re-render now so the dropdown reverts to the current mode until the user confirms.
+				this.display();
+				return;
+			}
+			await setEncryptionMode(this.plugin, next);
+			await hydrateSecrets(this.plugin, this.plugin.settings);
+			await this.plugin.refreshEncryptionStatus();
+			new Notice(`ReWrite: switched to ${modeLabel(next)}.`);
+			this.display();
+		} catch (e) {
+			console.error('ReWrite: encryption mode switch failed', e);
+			new Notice(`ReWrite: ${e instanceof Error ? e.message : String(e)}`);
+			await this.plugin.refreshEncryptionStatus();
+			this.display();
+		} finally {
+			this.modeChangeInFlight = false;
+		}
+	}
+
+	// Copy keys from the inactive method into the active method. When the source is the passphrase
+	// store it must be unlocked first (it may be locked while secretStorage is active), so prompt
+	// for the passphrase before the confirm. The source is never deleted; Clear does that.
+	private async handleCopy(): Promise<void> {
+		const status = this.plugin.encryptionStatus;
+		const active = status.mode;
+		const other: EncryptionMode = active === 'secretStorage' ? 'passphrase' : 'secretStorage';
+		const sourceCount = await countStoredKeys(this.plugin, other);
+		if (sourceCount === 0) {
+			new Notice('ReWrite: no keys to copy.');
+			return;
+		}
+
+		const confirmCopy = (): void => {
+			new ConfirmModal({
+				app: this.app,
+				title: 'Copy API keys',
+				body: `Copy ${sourceCount} key(s) from ${modeLabel(other)} into ${modeLabel(active)}? Existing keys with the same name in ${modeLabel(active)} are overwritten. The ${modeLabel(other)} copy is kept (use Clear to remove it).`,
+				confirmLabel: 'Copy',
+				onConfirm: async () => {
+					const n = await copyKeys(this.plugin);
+					await hydrateSecrets(this.plugin, this.plugin.settings);
+					await this.plugin.refreshEncryptionStatus();
+					new Notice(`ReWrite: copied ${n} key(s) into ${modeLabel(active)}.`);
+					this.display();
+				},
+			}).open();
+		};
+
+		// Copying FROM the passphrase store needs its derived key in memory to decrypt the source.
+		if (other === 'passphrase') {
+			new PassphraseModal({
+				app: this.app,
+				title: 'Unlock passphrase store',
+				description: 'Enter the passphrase that encrypts the keys you want to copy.',
+				confirmLabel: 'Unlock',
+				onSubmit: async (pass) => {
+					const ok = await unlockPassphraseStore(this.plugin, pass);
+					if (!ok) throw new Error('Incorrect passphrase.');
+					confirmCopy();
+				},
+			}).open();
+			return;
+		}
+		confirmCopy();
+	}
+
+	// Permanently wipe the keys saved under one method. Destructive, so behind a confirm.
+	private handleClear(mode: EncryptionMode, count: number): void {
+		const extra = mode === 'passphrase'
+			? ' You will need to set a passphrase again before storing keys under it.'
+			: '';
+		new ConfirmModal({
+			app: this.app,
+			title: 'Clear saved API keys',
+			body: `Permanently delete the ${count} API key(s) saved under ${modeLabel(mode)}? This cannot be undone.${extra}`,
+			confirmLabel: 'Delete keys',
+			confirmCls: 'mod-warning',
+			onConfirm: async () => {
+				await clearKeys(this.plugin, mode);
+				await hydrateSecrets(this.plugin, this.plugin.settings);
+				await this.plugin.refreshEncryptionStatus();
+				new Notice(`ReWrite: cleared ${count} key(s) from ${modeLabel(mode)}.`);
+				this.display();
+			},
+		}).open();
 	}
 
 	private openResetModal(): void {
@@ -337,44 +512,6 @@ export class ReWriteSettingTab extends PluginSettingTab {
 		}
 		lines.push('Passphrase: AES-GCM with an Argon2id-derived key (PBKDF2 fallback on devices that cannot run Argon2id). You enter a passphrase once per session, and the keys stay on this device. Works on every platform, including mobile.');
 		return lines.join(' ');
-	}
-
-	private async handleModeChange(next: EncryptionMode): Promise<void> {
-		if (this.modeChangeInFlight) return;
-		this.modeChangeInFlight = true;
-		try {
-			if (next === 'passphrase') {
-				new PassphraseModal({
-					app: this.app,
-					title: 'Set a passphrase',
-					description: 'A passphrase will be used to encrypt your API keys. Store it in your password manager; there is no recovery if you forget it.',
-					confirmLabel: 'Save',
-					requireConfirm: true,
-					enforceStrength: true,
-					onSubmit: async (pass) => {
-						await changeEncryptionMode(this.plugin, 'passphrase', pass);
-						await this.plugin.refreshEncryptionStatus();
-						new Notice('ReWrite: passphrase encryption enabled.');
-						this.display();
-					},
-				}).open();
-				// Modal cancel or completion handles re-render; re-render now so the dropdown
-				// doesn't appear "applied" until the user confirms.
-				this.display();
-				return;
-			}
-			await changeEncryptionMode(this.plugin, next);
-			await this.plugin.refreshEncryptionStatus();
-			new Notice('ReWrite: switched to Obsidian secret storage.');
-			this.display();
-		} catch (e) {
-			console.error('ReWrite: encryption mode change failed', e);
-			new Notice(`ReWrite: ${e instanceof Error ? e.message : String(e)}`);
-			await this.plugin.refreshEncryptionStatus();
-			this.display();
-		} finally {
-			this.modeChangeInFlight = false;
-		}
 	}
 
 	private renderActiveProfile(parent: HTMLElement): void {
