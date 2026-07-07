@@ -4,7 +4,8 @@
       "Bash(npm run *)",
       "WebSearch",
       "WebFetch(domain:docs.obsidian.md)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npm test *)"
     ]
   }
 }

@@ -1,4 +1,4 @@
-import { normalizePath, Plugin } from 'obsidian';
+import { normalizePath, Notice, Plugin } from 'obsidian';
 import { argon2id } from 'hash-wasm';
 import { isPassphraseAcceptable } from 'passphrase-strength';
 
@@ -93,6 +93,21 @@ let secretStorageCache: SecretStorageLike | null | undefined;
 let secretStorageAvailableCache: boolean | undefined;
 let cachedEnvelope: SecretsEnvelope | null = null;
 let unlockedKey: CryptoKey | null = null;
+// getEncryptionStatus() caches secretStorageAvailableCache from the startup probe, so a keyring
+// that becomes unavailable mid-session (OS keyring service restarts, permission revoked, etc.)
+// otherwise degrades silently: loadKey's catch used to just return '', surfacing later as a
+// confusing "missing API key". Warn once per session instead of on every failed read.
+let keyringFailureNoticeShown = false;
+function warnKeyringFailure(e: unknown): void {
+	console.error('ReWrite: secret storage operation failed', e);
+	if (keyringFailureNoticeShown) return;
+	keyringFailureNoticeShown = true;
+	new Notice(
+		'ReWrite: could not reach the OS secret store for your API keys this session. '
+		+ 'Check Settings → ReWrite → Encryption; you may need to re-enter your keys.',
+		0,
+	);
+}
 
 // ---------- Obsidian secret storage (app.secretStorage) ----------
 
@@ -266,14 +281,21 @@ function parseKdf(raw: unknown): PassphraseKdf | undefined {
 	return undefined;
 }
 
+// Thrown by parseEnvelope when the file content itself is unreadable (bad JSON, or JSON
+// that isn't even an object) as opposed to a recognized-but-outdated shape (version
+// mismatch / bad mode), which is a deliberate fresh-start reset, not corruption.
+class EnvelopeCorruptError extends Error {}
+
 function parseEnvelope(raw: string): SecretsEnvelope {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(raw);
-	} catch {
-		return defaultEnvelope();
+	} catch (e) {
+		throw new EnvelopeCorruptError(`secrets file is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
 	}
-	if (!isObject(parsed)) return defaultEnvelope();
+	if (!isObject(parsed)) {
+		throw new EnvelopeCorruptError('secrets file does not contain a JSON object');
+	}
 	const version = typeof parsed.version === 'number' ? parsed.version : 1;
 	if (version !== SECRETS_VERSION) {
 		// Pre-release: no migrations. Treat unknown shapes (incl. old 'plaintext'
@@ -299,15 +321,45 @@ function parseEnvelope(raw: string): SecretsEnvelope {
 	return envelope;
 }
 
+// A half-written or otherwise corrupt secrets file must not be silently treated as "no
+// secrets configured": that would let the very next save overwrite the salvageable
+// ciphertext with an empty envelope. Preserve the raw bytes alongside the original path
+// (best-effort) before falling back to a fresh envelope, and warn the user once.
+async function preserveCorruptSecretsFile(plugin: Plugin, path: string, raw: string): Promise<void> {
+	try {
+		await plugin.app.vault.adapter.write(`${path}.corrupt`, raw);
+	} catch (e) {
+		console.error('ReWrite: failed to preserve corrupt secrets file for recovery', e);
+	}
+	new Notice(
+		'ReWrite: your encrypted secrets file could not be read and looked corrupted. '
+		+ 'A copy was saved as secrets.json.nosync.corrupt before resetting to an empty, '
+		+ 'unconfigured store. Do not reconfigure API keys until you have recovered that '
+		+ 'file if you need the old ones.',
+		0,
+	);
+}
+
 async function readEnvelopeFromDisk(plugin: Plugin): Promise<SecretsEnvelope> {
 	const path = secretsPath(plugin);
 	const exists = await plugin.app.vault.adapter.exists(path);
 	if (!exists) return defaultEnvelope();
+	let raw: string;
 	try {
-		const raw = await plugin.app.vault.adapter.read(path);
-		return parseEnvelope(raw);
-	} catch {
+		raw = await plugin.app.vault.adapter.read(path);
+	} catch (e) {
+		console.error('ReWrite: failed to read secrets file', e);
 		return defaultEnvelope();
+	}
+	try {
+		return parseEnvelope(raw);
+	} catch (e) {
+		if (e instanceof EnvelopeCorruptError) {
+			console.error('ReWrite: secrets file is corrupt', e);
+			await preserveCorruptSecretsFile(plugin, path, raw);
+			return defaultEnvelope();
+		}
+		throw e;
 	}
 }
 
@@ -317,9 +369,30 @@ async function ensureEnvelope(plugin: Plugin): Promise<SecretsEnvelope> {
 	return cachedEnvelope;
 }
 
+// Writes via a temp file + remove + rename so a crash or sync conflict mid-write leaves
+// either the old file or the new one intact, never a truncated/interleaved one. Falls
+// back to a direct write if the adapter doesn't support rename (defensive; Obsidian's
+// adapters do).
 async function writeEnvelope(plugin: Plugin, envelope: SecretsEnvelope): Promise<void> {
 	const path = secretsPath(plugin);
-	await plugin.app.vault.adapter.write(path, JSON.stringify(envelope));
+	const tmpPath = `${path}.tmp`;
+	const json = JSON.stringify(envelope);
+	const adapter = plugin.app.vault.adapter;
+	try {
+		await adapter.write(tmpPath, json);
+		if (await adapter.exists(path)) {
+			await adapter.remove(path);
+		}
+		await adapter.rename(tmpPath, path);
+	} catch (e) {
+		console.error('ReWrite: atomic secrets write failed, falling back to a direct write', e);
+		await adapter.write(path, json);
+		try {
+			if (await adapter.exists(tmpPath)) await adapter.remove(tmpPath);
+		} catch {
+			// best effort
+		}
+	}
 	cachedEnvelope = envelope;
 }
 
@@ -640,7 +713,8 @@ export async function loadKey(plugin: Plugin, id: string): Promise<string> {
 		if (!store) return '';
 		try {
 			return (await store.getSecret(nsId(plugin, id))) ?? '';
-		} catch {
+		} catch (e) {
+			warnKeyringFailure(e);
 			return '';
 		}
 	}

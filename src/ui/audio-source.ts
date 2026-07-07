@@ -2,10 +2,10 @@ import { App, Notice, TAbstractFile, TFile } from 'obsidian';
 import type ReWritePlugin from '../main';
 import { NoteTemplate } from '../types';
 import { resolveActiveProfile } from '../platform';
-import { runPipeline } from '../pipeline';
 import { AUDIO_EXTENSIONS, extensionToMime } from '../audio-persist';
 import { isProfileConfigured } from './setup-card';
 import { ReWriteModal } from './modal';
+import { runBackgroundPipeline } from './pipeline-progress';
 
 const AUDIO_EXT_SET: ReadonlySet<string> = new Set<string>(AUDIO_EXTENSIONS);
 
@@ -45,10 +45,17 @@ export async function runAudioFilePipeline(
 		new ReWriteModal(plugin.app, plugin).open();
 		return;
 	}
-	const progress = new Notice('ReWrite: reprocessing audio...', 0);
+	let blob: Blob;
 	try {
-		const blob = await readAudioFileAsBlob(plugin.app, file);
-		await runPipeline({
+		blob = await readAudioFileAsBlob(plugin.app, file);
+	} catch (e) {
+		const message = e instanceof Error ? e.message : String(e);
+		new Notice(`ReWrite: ${message}`);
+		return;
+	}
+	await runBackgroundPipeline(
+		plugin,
+		{
 			app: plugin.app,
 			settings,
 			host: plugin,
@@ -56,14 +63,7 @@ export async function runAudioFilePipeline(
 			template,
 			source: { kind: 'audio', audio: blob, sourcePath: file.path },
 			contextHint: contextHint?.trim() || undefined,
-		});
-		progress.hide();
-		plugin.settings.lastUsedTemplateId = template.id;
-		await plugin.saveSettings();
-		new Notice('ReWrite complete.');
-	} catch (e) {
-		progress.hide();
-		const message = e instanceof Error ? e.message : String(e);
-		new Notice(`ReWrite: ${message}`);
-	}
+		},
+		{ startMessage: 'ReWrite: reprocessing audio...', templateId: template.id },
+	);
 }

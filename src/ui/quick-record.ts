@@ -1,11 +1,12 @@
 import { App, Notice, Platform } from 'obsidian';
 import type ReWritePlugin from '../main';
-import { PipelineSource, PipelineStage, runPipeline } from '../pipeline';
+import { PipelineSource, runPipeline } from '../pipeline';
 import { isMediaRecorderAvailable, resolveActiveProfile } from '../platform';
 import { Recorder } from '../recorder';
 import { NoteTemplate } from '../types';
 import { isProfileConfigured } from './setup-card';
 import { ReWriteModal } from './modal';
+import { formatDuration, stageLabel } from './pipeline-progress';
 
 // Continuous silence (ms) before the Quick Record floater warns about a muted / dead mic.
 const SILENCE_WARNING_MS = 3000;
@@ -17,6 +18,10 @@ export class QuickRecordController {
 	private floater: QuickRecordFloater | null = null;
 	private settled = false;
 	private template: NoteTemplate;
+	// Wired into runPipeline's signal during finish() so the floater's Cancel button keeps
+	// working after recording stops, instead of becoming a no-op once processing starts (a
+	// hung transcription/LLM call previously had no way to be stopped short of reloading).
+	private controller: AbortController | null = null;
 
 	constructor(
 		private readonly plugin: ReWritePlugin,
@@ -35,6 +40,7 @@ export class QuickRecordController {
 				void this.finish();
 			},
 			onCancel: () => this.cancel(),
+			onAbortProcessing: () => this.controller?.abort(),
 			getTemplates: () => this.plugin.templates,
 			getActiveTemplateId: () => this.template.id,
 			onPickTemplate: (t) => {
@@ -68,6 +74,7 @@ export class QuickRecordController {
 		this.settled = true;
 		this.stopTimer();
 		this.floater?.setBusy('Processing...');
+		this.controller = new AbortController();
 		try {
 			const source = await this.endCapture();
 			const { profile } = resolveActiveProfile(this.plugin.settings);
@@ -78,6 +85,7 @@ export class QuickRecordController {
 				profile,
 				template: this.template,
 				source,
+				signal: this.controller.signal,
 				onStage: (stage) => this.floater?.setBusy(stageLabel(stage)),
 			});
 			this.plugin.settings.lastUsedTemplateId = this.template.id;
@@ -207,6 +215,9 @@ function formatCommandHotkey(app: App, commandId: string): string | null {
 interface QuickRecordFloaterOptions {
 	onStop: () => void;
 	onCancel: () => void;
+	// Called instead of onCancel when Cancel is clicked while busy (processing), aborting the
+	// in-flight pipeline rather than being a no-op.
+	onAbortProcessing: () => void;
 	getTemplates: () => NoteTemplate[];
 	getActiveTemplateId: () => string;
 	onPickTemplate: (t: NoteTemplate) => void;
@@ -268,7 +279,10 @@ class QuickRecordFloater {
 			cls: 'rewrite-quick-cancel',
 		});
 		cancelBtn.addEventListener('click', () => {
-			if (this.busy) return;
+			if (this.busy) {
+				options.onAbortProcessing();
+				return;
+			}
 			options.onCancel();
 		});
 
@@ -322,17 +336,25 @@ class QuickRecordFloater {
 		if (templates.length === 0) return;
 		const activeId = this.options.getActiveTemplateId();
 		const popover = this.el.createDiv({ cls: 'rewrite-quick-popover' });
+		popover.setAttribute('role', 'menu');
+		const items: HTMLButtonElement[] = [];
+		let activeItem: HTMLButtonElement | null = null;
 		for (const t of templates) {
 			const item = popover.createEl('button', {
 				cls: 'rewrite-quick-popover-item',
 				text: t.name,
 			});
-			if (t.id === activeId) item.addClass('is-active');
+			item.setAttribute('role', 'menuitem');
+			if (t.id === activeId) {
+				item.addClass('is-active');
+				activeItem = item;
+			}
 			item.addEventListener('click', (e) => {
 				e.stopPropagation();
 				this.options.onPickTemplate(t);
 				this.closePopover();
 			});
+			items.push(item);
 		}
 		this.popover = popover;
 
@@ -343,16 +365,33 @@ class QuickRecordFloater {
 			this.closePopover();
 		};
 		this.keyHandler = (e: KeyboardEvent) => {
-			if (e.key === 'Escape') this.closePopover();
+			if (e.key === 'Escape') {
+				this.closePopover();
+				return;
+			}
+			if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+			const doc = this.popoverDoc;
+			const idx = doc ? items.indexOf(doc.activeElement as HTMLButtonElement) : -1;
+			if (idx === -1) return;
+			e.preventDefault();
+			const next = e.key === 'ArrowDown'
+				? items[(idx + 1) % items.length]
+				: items[(idx - 1 + items.length) % items.length];
+			next?.focus();
 		};
 		const doc = activeDocument;
 		this.popoverDoc = doc;
 		doc.addEventListener('click', this.outsideClickHandler, true);
 		doc.addEventListener('keydown', this.keyHandler, true);
+
+		// Move focus into the list so a keyboard user doesn't have to Tab through the whole
+		// floater to reach it; land on the active template when there is one.
+		(activeItem ?? items[0])?.focus();
 	}
 
 	private closePopover(): void {
 		const doc = this.popoverDoc ?? activeDocument;
+		const hadPopover = this.popover !== null;
 		if (this.outsideClickHandler) {
 			doc.removeEventListener('click', this.outsideClickHandler, true);
 			this.outsideClickHandler = null;
@@ -364,25 +403,10 @@ class QuickRecordFloater {
 		this.popoverDoc = null;
 		this.popover?.remove();
 		this.popover = null;
+		// Return focus to the trigger so a keyboard user isn't dropped onto the document body.
+		// Guarded on the floater still being attached (dispose() also routes through here while
+		// tearing the whole floater down, in which case there's nothing sensible to focus).
+		if (hadPopover && this.el.isConnected) this.templateBtn.focus();
 	}
 }
 
-function stageLabel(stage: PipelineStage): string {
-	switch (stage) {
-		case 'persist-audio':
-			return 'Saving audio...';
-		case 'transcribe':
-			return 'Transcribing...';
-		case 'cleanup':
-			return 'Cleaning up...';
-		case 'insert':
-			return 'Inserting...';
-	}
-}
-
-function formatDuration(ms: number): string {
-	const total = Math.max(0, Math.floor(ms / 1000));
-	const minutes = Math.floor(total / 60);
-	const seconds = total % 60;
-	return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-}

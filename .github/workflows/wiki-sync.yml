@@ -32,12 +32,17 @@ jobs:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               run: |
                   set -euo pipefail
-                  wiki_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+                  # Auth via a transient http.extraheader (passed per-invocation with -c) rather
+                  # than embedding the token in the remote URL: a token-in-URL persists into
+                  # wiki-repo/.git/config on disk and can be echoed by git's own error/verbose
+                  # output, so it's the wrong place for a secret even for a short-lived runner.
+                  auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+                  wiki_url="https://github.com/${GITHUB_REPOSITORY}.wiki.git"
 
                   git config --global user.name "github-actions[bot]"
                   git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-                  git clone --depth 1 "$wiki_url" wiki-repo
+                  git -c http.extraheader="${auth_header}" clone --depth 1 "$wiki_url" wiki-repo
 
                   # Replace the wiki contents with the repo's wiki/ folder,
                   # preserving the wiki repo's own .git directory.
@@ -51,4 +56,4 @@ jobs:
                       exit 0
                   fi
                   git commit -m "Sync wiki from ${GITHUB_SHA}"
-                  git push origin HEAD
+                  git -c http.extraheader="${auth_header}" push origin HEAD

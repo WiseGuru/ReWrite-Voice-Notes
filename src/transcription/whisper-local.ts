@@ -28,8 +28,9 @@ export function createWhisperLocalTranscription(): TranscriptionProvider {
 			}
 			let wavBuffer: ArrayBuffer;
 			try {
-				wavBuffer = await transcodeToWavPcm(audio);
+				wavBuffer = await transcodeToWavPcm(audio, undefined, signal);
 			} catch (e) {
+				if (e instanceof DOMException && e.name === 'AbortError') throw e;
 				const msg = e instanceof Error ? e.message : String(e);
 				throw new ProviderError('whisper-local', 0, '', `Failed to transcode audio to WAV for whisper.cpp: ${msg}`);
 			}

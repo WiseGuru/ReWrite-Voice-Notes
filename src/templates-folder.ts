@@ -1,10 +1,23 @@
 import { App, normalizePath, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
-import { InsertMode, NotePropertySpec, NoteTemplate } from './types';
+import { GlobalSettings, InsertMode, NotePropertySpec, NoteTemplate } from './types';
 import { freshDefaultTemplates } from './settings/default-templates';
 import { allPriorVersions, priorVersionsForId } from './settings/template-history';
 import { writeTemplateUpdateReport } from './template-guide';
 
 const VALID_INSERT_MODES: ReadonlySet<string> = new Set(['cursor', 'newFile', 'append']);
+
+// Shared by the main modal (its default selection before a user override) and the plugin's
+// entry points that need a template id without opening the modal (editor menu, reprocess-audio).
+// Was duplicated verbatim in both call sites.
+export function pickDefaultTemplateId(settings: GlobalSettings, templates: NoteTemplate[]): string {
+	if (settings.lastUsedTemplateId && templates.some((t) => t.id === settings.lastUsedTemplateId)) {
+		return settings.lastUsedTemplateId;
+	}
+	if (settings.defaultTemplateId && templates.some((t) => t.id === settings.defaultTemplateId)) {
+		return settings.defaultTemplateId;
+	}
+	return templates[0]?.id ?? '';
+}
 
 export async function loadTemplatesFromFolder(app: App, folderPath: string): Promise<NoteTemplate[]> {
 	const normalized = normalizeFolderPath(folderPath);
@@ -104,7 +117,7 @@ export interface UpdateResult {
 // kept edit becomes a report conflict; scalars/flags are adopted-or-kept
 // silently, and a user property the default dropped is always kept (never
 // deleted). Pure and synchronous.
-function mergeTemplate(onDisk: NoteTemplate, def: NoteTemplate, priors: NoteTemplate[]): {
+export function mergeTemplate(onDisk: NoteTemplate, def: NoteTemplate, priors: NoteTemplate[]): {
 	merged: NoteTemplate;
 	conflicts: TemplateUpdateConflict[];
 	changes: string[];
@@ -220,7 +233,10 @@ export async function updateDefaultTemplates(app: App, folderPath: string): Prom
 	for (const child of folder.children) {
 		if (!(child instanceof TFile)) continue;
 		if (child.extension !== 'md') continue;
-		const id = await readTemplateId(app, child);
+		// Single read per file, reused for the id check, the full parse, and the diff below
+		// (previously up to three separate reads of the same file).
+		const original = await app.vault.read(child);
+		const id = readTemplateIdFromContent(original);
 		if (!id) continue;
 		const def = defaultsById.get(id);
 		if (!def) continue; // user's own template (id not in the default set)
@@ -228,7 +244,7 @@ export async function updateDefaultTemplates(app: App, folderPath: string): Prom
 
 		let onDisk: NoteTemplate | null = null;
 		try {
-			onDisk = await parseTemplateFile(app, child);
+			onDisk = parseTemplateContent(child, original);
 		} catch {
 			onDisk = null;
 		}
@@ -243,7 +259,6 @@ export async function updateDefaultTemplates(app: App, folderPath: string): Prom
 
 		const { merged, conflicts: cf, changes } = mergeTemplate(onDisk, def, priorVersionsForId(id));
 		const rendered = renderTemplateFile(merged);
-		const original = await app.vault.read(child);
 		// Normalize CRLF so we don't rewrite a file purely over line endings.
 		const changedOnDisk = rendered !== original.replace(/\r\n/g, '\n');
 
@@ -335,6 +350,13 @@ export function isPathInTemplatesFolder(path: string, folderPath: string): boole
 
 async function parseTemplateFile(app: App, file: TFile): Promise<NoteTemplate | null> {
 	const content = await app.vault.read(file);
+	return parseTemplateContent(file, content);
+}
+
+// Split out from parseTemplateFile so callers that already hold the file content (the update
+// walk previously read each candidate file up to three times: once for the id, once for the
+// full parse, once more to diff against the rendered output) can parse without a redundant read.
+export function parseTemplateContent(file: TFile, content: string): NoteTemplate | null {
 	const { frontmatter, body } = splitFrontmatter(content);
 	if (!frontmatter) return null;
 	const parsed: unknown = parseYaml(frontmatter);
@@ -427,6 +449,14 @@ async function collectExistingIds(app: App, folder: TFolder): Promise<Set<string
 async function readTemplateId(app: App, file: TFile): Promise<string | null> {
 	try {
 		const content = await app.vault.read(file);
+		return readTemplateIdFromContent(content);
+	} catch {
+		return null;
+	}
+}
+
+function readTemplateIdFromContent(content: string): string | null {
+	try {
 		const { frontmatter } = splitFrontmatter(content);
 		if (!frontmatter) return null;
 		const parsed: unknown = parseYaml(frontmatter);
@@ -464,7 +494,7 @@ function splitFrontmatter(content: string): { frontmatter: string | null; body: 
 	return { frontmatter: null, body: content };
 }
 
-function renderTemplateFile(template: NoteTemplate): string {
+export function renderTemplateFile(template: NoteTemplate): string {
 	const fm = stringifyYaml({
 		id: template.id,
 		name: template.name,
@@ -501,9 +531,22 @@ function renderTemplateFile(template: NoteTemplate): string {
 	return `---\n${fm}\n${disableLine}\n${contextLine}\n${diarizeLine}\n${titleLine}${propsBlock}\n---\n${template.prompt}\n`;
 }
 
+// Guards against names that are unsafe/unusable as a file basename: purely dots (would
+// produce a hidden Unix file or an OS-trimmed Windows one), or one of the reserved Windows
+// device names (case-insensitive; Windows treats these as special regardless of extension,
+// e.g. "CON.md" is still the reserved device). Intended as the LAST step of a sanitization
+// pipeline: an intermediate transform (dot-stripping, length capping) can turn a name that
+// wasn't reserved into one that is, so callers with extra hardening beyond sanitizeFilename
+// (see insert.ts's titleToFilename) should call this again on their own final result.
+export function guardReservedName(name: string): string {
+	if (/^\.*$/.test(name)) return 'Untitled';
+	if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name)) return `_${name}`;
+	return name;
+}
+
 export function sanitizeFilename(name: string): string {
 	const cleaned = name.replace(/[\\/:*?"<>|]/g, '-').trim();
-	return cleaned || 'Untitled';
+	return guardReservedName(cleaned || 'Untitled');
 }
 
 function normalizeFolderPath(folderPath: string): string {

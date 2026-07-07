@@ -28,6 +28,10 @@ A typical move from passphrase to secret storage: switch the dropdown to **Obsid
 
 The deeper implementation detail (envelope schema, KDF parameters, the switch/copy/clear model) is developer-facing and lives in the repo's `docs/SECRETS.md`.
 
+## If the secrets file gets corrupted
+
+If `secrets.json.nosync` is ever truncated or damaged (a crash mid-write, a sync conflict merging two versions into one file), the plugin does not silently discard it. On the next load you will see a notice explaining that the file looked corrupted and that a copy was saved as `secrets.json.nosync.corrupt` next to it, before the plugin falls back to a fresh, unconfigured encryption setup. Your keys are not automatically recovered from that copy (a corrupted file usually can't be repaired), but it is preserved on disk in case you need to hand it to someone for recovery attempts, or just want the failure evidence. Once you see that notice, treat existing keys as gone: re-enter them rather than trying to save new settings first, since the fresh envelope will not merge with the old one.
+
 ## Excluding `secrets.json.nosync` from sync
 
 If you use **passphrase mode** and do not want the encrypted key file copied between devices, exclude it from your sync and enter keys once per device. Configure the exclusion **before the first sync**, since files already uploaded usually remain on the remote. (In secret-storage mode this file holds no keys, so excluding it has no effect on the keys themselves.)

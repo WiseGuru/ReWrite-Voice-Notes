@@ -2,9 +2,9 @@ import { App, Editor, MarkdownView, Notice } from 'obsidian';
 import type ReWritePlugin from '../main';
 import { NoteTemplate } from '../types';
 import { resolveActiveProfile } from '../platform';
-import { runPipeline } from '../pipeline';
 import { isProfileConfiguredForText } from './setup-card';
 import { ReWriteModal } from './modal';
+import { runBackgroundPipeline } from './pipeline-progress';
 
 export interface TextResolution {
 	text: string;
@@ -40,23 +40,16 @@ export async function runTextPipeline(
 		new ReWriteModal(plugin.app, plugin).open();
 		return;
 	}
-	const progress = new Notice('ReWrite: processing text...', 0);
-	try {
-		await runPipeline({
+	await runBackgroundPipeline(
+		plugin,
+		{
 			app: plugin.app,
 			settings,
 			host: plugin,
 			profile,
 			template,
 			source: { kind: 'text', text },
-		});
-		progress.hide();
-		plugin.settings.lastUsedTemplateId = template.id;
-		await plugin.saveSettings();
-		new Notice('ReWrite complete.');
-	} catch (e) {
-		progress.hide();
-		const message = e instanceof Error ? e.message : String(e);
-		new Notice(`ReWrite: ${message}`);
-	}
+		},
+		{ startMessage: 'ReWrite: processing text...', templateId: template.id },
+	);
 }

@@ -29,6 +29,10 @@ secrets.json*
 # Claude Code: per-user harness config (kept out of git)
 .claude/settings.local.json
 
+# Dev tooling: per-machine paths for `npm run review` / `npm run release:prep`.
+# Copy dev-tools.config.example.json to this file and fill it in; never commit it.
+dev-tools.config.json
+
 # Claude Code: ephemeral working docs (the folder is kept via .gitkeep)
 docs/claude-scratch/*
 !docs/claude-scratch/.gitkeep

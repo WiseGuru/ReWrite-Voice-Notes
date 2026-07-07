@@ -453,26 +453,7 @@ Use `esbuild` (not webpack):
 
 ## Testing Checklist
 
-- [ ] Plugin loads without errors in the Obsidian developer console
-- [ ] Auto-detection correctly activates Desktop profile on Electron, Mobile profile on mobile
-- [ ] Manual profile override in settings works and persists
-- [ ] Global API keys fall back correctly when profile-level keys are empty
-- [ ] Settings tab renders all sections; provider-specific fields show/hide correctly
-- [ ] Template CRUD: add, edit, delete, and drag-to-reorder all work
-- [ ] Modal opens via command palette; both tabs are accessible
-- [ ] Record tab: mic permission prompt fires; recording indicator and timer show; stop works
-- [ ] Paste tab: text submitted correctly reaches LLM; output inserted per `insertMode`
-- [ ] All three `insertMode` values produce correct output placement
-- [ ] `{{date}}` and `{{time}}` in filename templates expand correctly
-- [ ] All five default templates produce sensibly structured output
-- [ ] Each transcription provider: happy path produces a transcript (use real or mocked API)
-- [ ] Each LLM provider: happy path produces cleaned-up text
-- [ ] Web Speech path: SpeechRecognition session starts on Record; transcript flows to LLM
-- [ ] AssemblyAI and Rev.ai polling: completes successfully; timeout after 60s surfaces error
-- [ ] Missing API key shows Notice and halts before any network call
-- [ ] Transcription error surfaces to user; LLM error surfaces with clipboard fallback
-- [ ] Quick Record command starts recording without opening the modal
-- [ ] Plugin functions on Obsidian mobile (Web Speech + paste paths at minimum)
+> **Retired.** This list went stale (5 templates instead of 10, a removed `webspeech` provider, a flat 60 s poll timeout, a removed clipboard fallback). The live, kept-current manual verification pass is the **`release-checklist` skill** at [`.claude/skills/release-checklist/`](.claude/skills/release-checklist/) (`CHECKLIST.md` there is runnable standalone). See [docs/DEV_TOOLING.md](docs/DEV_TOOLING.md). Heading kept as a stable anchor.
 
 ---
 

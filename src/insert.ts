@@ -1,6 +1,6 @@
 import { App, MarkdownView, Modal, moment, normalizePath, Notice, Setting, TFile } from 'obsidian';
 import { NewFileCollisionMode, NoteTemplate } from './types';
-import { sanitizeFilename } from './templates-folder';
+import { guardReservedName, sanitizeFilename } from './templates-folder';
 
 export type InsertStage = 'cursor' | 'newFile' | 'append';
 
@@ -231,10 +231,12 @@ function titleToFilename(title: string): string {
 	if (safe.length > MAX_TITLE_LEN) {
 		safe = safe.slice(0, MAX_TITLE_LEN).replace(/[ .]+$/, '');
 	}
-	if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(safe)) safe = `_${safe}`;
-	// sanitizeFilename returns 'Untitled' for empty input; treat that as "no usable
-	// title" so the caller falls back to the date template rather than a literal
-	// "Untitled" file.
+	// Re-guard after the extra stripping/capping above: it can turn a name that wasn't
+	// reserved (or wasn't all-dots) right after sanitizeFilename into one that is.
+	safe = guardReservedName(safe);
+	// sanitizeFilename/guardReservedName return 'Untitled' for empty/dot-only input; treat
+	// that as "no usable title" so the caller falls back to the date template rather than a
+	// literal "Untitled" file.
 	return safe === 'Untitled' ? '' : safe;
 }
 

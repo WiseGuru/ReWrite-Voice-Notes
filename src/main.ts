@@ -13,11 +13,13 @@ import { GlobalSettings, KnownNoun, NoteTemplate, PipelineHost } from './types';
 import { WhisperHost } from './whisper-host';
 import { bindWhisperHost } from './transcription/whisper-local';
 import { resolveActiveProfile } from './platform';
-import { isPathInTemplatesFolder, loadTemplatesFromFolder } from './templates-folder';
+import { isPathInTemplatesFolder, loadTemplatesFromFolder, pickDefaultTemplateId } from './templates-folder';
 import { isPathSharedCore, loadSharedCoreFromFile } from './shared-core';
 import { isPathAssistantPrompt, loadAssistantPromptFromFile } from './assistant-prompt';
 import { isPathKnownNouns, loadKnownNounsFromFile } from './known-nouns';
 import { setEncryptionMode, EncryptionStatus, getEncryptionStatus, unlockSecrets, warmSecretStorage } from './secrets';
+
+type RefreshKind = 'templates' | 'sharedCore' | 'assistantPrompt' | 'knownNouns';
 
 export default class ReWritePlugin extends Plugin implements PipelineHost {
 	settings!: GlobalSettings;
@@ -28,6 +30,22 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 	knownNouns: KnownNoun[] = [];
 	encryptionStatus!: EncryptionStatus;
 	private activeQuickRecord: QuickRecordController | null = null;
+	// Reserved synchronously before the async startQuickRecord() (which awaits getUserMedia)
+	// resolves. activeQuickRecord alone isn't enough: it's only assigned after that await, so
+	// two rapid hotkey presses would both see it null and each open a mic stream, orphaning
+	// the first one.
+	private quickRecordStarting = false;
+	// Debounce timers for vault-event-triggered refreshes: an editor autosaving a template file
+	// fires several `modify` events in quick succession, and each would otherwise trigger its
+	// own full folder reload. Keyed per refresh kind so unrelated vault files don't share a timer.
+	private pendingRefresh: Partial<Record<RefreshKind, number>> = {};
+	// Generation counters guard against a stale, slower-resolving reload overwriting a newer one:
+	// each refresh*() bumps its counter before awaiting and only applies the result if the
+	// counter is still current when the load resolves.
+	private templatesGen = 0;
+	private sharedCoreGen = 0;
+	private assistantPromptGen = 0;
+	private knownNounsGen = 0;
 	private unlockListeners = new Set<() => void>();
 
 	async onload(): Promise<void> {
@@ -181,6 +199,10 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 		this.activeQuickRecord?.cancel();
 		this.activeQuickRecord = null;
 		void this.whisperHost?.stop();
+		for (const handle of Object.values(this.pendingRefresh)) {
+			if (handle !== undefined) window.clearTimeout(handle);
+		}
+		this.pendingRefresh = {};
 	}
 
 	async saveSettings(): Promise<void> {
@@ -243,34 +265,59 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 		}).open();
 	}
 
+	// Each bumps its generation counter before awaiting the load and only applies the result if
+	// the counter is still current, so an in-flight reload superseded by a newer one (concurrent
+	// direct call + debounced vault-event call, or two vault events close together) cannot
+	// overwrite fresher state with stale data.
 	async refreshTemplates(): Promise<void> {
-		this.templates = await loadTemplatesFromFolder(this.app, this.settings.templatesFolderPath);
+		const gen = ++this.templatesGen;
+		const templates = await loadTemplatesFromFolder(this.app, this.settings.templatesFolderPath);
+		if (gen === this.templatesGen) this.templates = templates;
 	}
 
 	async refreshSharedCore(): Promise<void> {
-		this.sharedCore = await loadSharedCoreFromFile(this.app, this.settings.sharedCorePath);
+		const gen = ++this.sharedCoreGen;
+		const sharedCore = await loadSharedCoreFromFile(this.app, this.settings.sharedCorePath);
+		if (gen === this.sharedCoreGen) this.sharedCore = sharedCore;
 	}
 
 	async refreshAssistantPrompt(): Promise<void> {
-		this.assistantPrompt = await loadAssistantPromptFromFile(this.app, this.settings.assistantPromptPath);
+		const gen = ++this.assistantPromptGen;
+		const assistantPrompt = await loadAssistantPromptFromFile(this.app, this.settings.assistantPromptPath);
+		if (gen === this.assistantPromptGen) this.assistantPrompt = assistantPrompt;
 	}
 
 	async refreshKnownNouns(): Promise<void> {
-		this.knownNouns = await loadKnownNounsFromFile(this.app, this.settings.knownNounsPath);
+		const gen = ++this.knownNounsGen;
+		const knownNouns = await loadKnownNounsFromFile(this.app, this.settings.knownNounsPath);
+		if (gen === this.knownNounsGen) this.knownNouns = knownNouns;
+	}
+
+	// Debounces a vault-event-triggered refresh (a template file autosaving fires several
+	// `modify` events in quick succession) by waiting for a quiet period before reloading. Direct
+	// callers (e.g. the settings tab's Populate button) call refresh*() straight instead, so they
+	// still get an immediate, awaitable reload.
+	private debounceRefresh(kind: RefreshKind, fn: () => Promise<void>): void {
+		const existing = this.pendingRefresh[kind];
+		if (existing !== undefined) window.clearTimeout(existing);
+		this.pendingRefresh[kind] = window.setTimeout(() => {
+			this.pendingRefresh[kind] = undefined;
+			void fn();
+		}, 250);
 	}
 
 	private onVaultFileChanged(path: string): void {
 		if (this.isInTemplatesFolder(path)) {
-			void this.refreshTemplates();
+			this.debounceRefresh('templates', () => this.refreshTemplates());
 		}
 		if (isPathSharedCore(path, this.settings.sharedCorePath)) {
-			void this.refreshSharedCore();
+			this.debounceRefresh('sharedCore', () => this.refreshSharedCore());
 		}
 		if (isPathAssistantPrompt(path, this.settings.assistantPromptPath)) {
-			void this.refreshAssistantPrompt();
+			this.debounceRefresh('assistantPrompt', () => this.refreshAssistantPrompt());
 		}
 		if (isPathKnownNouns(path, this.settings.knownNounsPath)) {
-			void this.refreshKnownNouns();
+			this.debounceRefresh('knownNouns', () => this.refreshKnownNouns());
 		}
 	}
 
@@ -305,6 +352,7 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 			await this.activeQuickRecord.finish();
 			return;
 		}
+		if (this.quickRecordStarting) return;
 		const commandId = `${this.manifest.id}:${opts?.fixed ? 'quick-record-fixed' : 'quick-record'}`;
 		let template: NoteTemplate | undefined;
 		if (opts?.fixed) {
@@ -314,9 +362,14 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 				return;
 			}
 		}
-		this.activeQuickRecord = await startQuickRecord(this, () => {
-			this.activeQuickRecord = null;
-		}, { template, commandId });
+		this.quickRecordStarting = true;
+		try {
+			this.activeQuickRecord = await startQuickRecord(this, () => {
+				this.activeQuickRecord = null;
+			}, { template, commandId });
+		} finally {
+			this.quickRecordStarting = false;
+		}
 	}
 
 	private processTextWithTemplate(preResolved?: TextResolution): void {
@@ -339,7 +392,7 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 		new TemplatePickerModal({
 			app: this.app,
 			templates: this.templates,
-			defaultTemplateId: this.pickDefaultTemplateId(),
+			defaultTemplateId: pickDefaultTemplateId(this.settings, this.templates),
 			previewText,
 			onPick: (template) => {
 				void runTextPipeline(this, template, source.text);
@@ -378,7 +431,7 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 		new TemplatePickerModal({
 			app: this.app,
 			templates: this.templates,
-			defaultTemplateId: this.pickDefaultTemplateId(),
+			defaultTemplateId: pickDefaultTemplateId(this.settings, this.templates),
 			previewText: `Audio: ${file.path}`,
 			showContext: this.templates.some((t) => t.enableContextHint),
 			onPick: (template, contextHint) => {
@@ -391,7 +444,7 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 		const cursor = editor.getCursor();
 		const line = editor.getLine(cursor.line);
 		const re = /!\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g;
-		const sourcePath = info instanceof MarkdownView ? info.file?.path ?? '' : info.file?.path ?? '';
+		const sourcePath = info.file?.path ?? '';
 		let match: RegExpExecArray | null;
 		while ((match = re.exec(line)) !== null) {
 			const start = match.index;
@@ -405,14 +458,4 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 		return null;
 	}
 
-	private pickDefaultTemplateId(): string {
-		const s = this.settings;
-		if (s.lastUsedTemplateId && this.templates.some((t) => t.id === s.lastUsedTemplateId)) {
-			return s.lastUsedTemplateId;
-		}
-		if (s.defaultTemplateId && this.templates.some((t) => t.id === s.defaultTemplateId)) {
-			return s.defaultTemplateId;
-		}
-		return this.templates[0]?.id ?? '';
-	}
 }
