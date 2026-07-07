@@ -66,7 +66,7 @@ export default tseslint.config(
 			parserOptions: {
 				projectService: {
 					allowDefaultProject: [
-						'eslint.config.js',
+						'eslint.config.mts',
 						'manifest.json'
 					]
 				},
@@ -84,13 +84,41 @@ export default tseslint.config(
 			'obsidianmd/ui/sentence-case-locale-module': ['error', sentenceCaseOptions],
 		},
 	},
+	{
+		// test/ runs under Node via Vitest, not inside Obsidian, so the Node-builtin ban that
+		// keeps src/ portable to the Electron/mobile plugin runtime doesn't apply here.
+		files: ['test/**/*.ts'],
+		rules: {
+			'import/no-nodejs-modules': 'off',
+		},
+	},
+	{
+		// These two files test the plain-JS dev scripts (local-review.mjs /
+		// prepare-release-vault.mjs), which ship no type declarations, so every import from
+		// them is typed `any` and trips the type-safety rules purely on that (not a real unsafe
+		// access). `hardcoded-config-path` is an Obsidian-runtime rule about `Vault#configDir`;
+		// it does not apply to a release-prep build script that copies into a fixed
+		// `.obsidian/plugins/` path. Relaxations scoped to just these two files.
+		files: ['test/local-review.test.ts', 'test/prepare-release-vault.test.ts'],
+		rules: {
+			'@typescript-eslint/no-unsafe-call': 'off',
+			'@typescript-eslint/no-unsafe-member-access': 'off',
+			'@typescript-eslint/no-unsafe-return': 'off',
+			'@typescript-eslint/no-unsafe-assignment': 'off',
+			'obsidianmd/hardcoded-config-path': 'off',
+		},
+	},
 	globalIgnores([
 		"node_modules",
 		"dist",
 		"esbuild.config.mjs",
-		"eslint.config.js",
+		"eslint.config.mts",
 		"version-bump.mjs",
+		"local-review.mjs",
+		"prepare-release-vault.mjs",
+		"dev-tools.config.example.json",
 		"versions.json",
 		"main.js",
+		"vitest.config.ts",
 	]),
 );

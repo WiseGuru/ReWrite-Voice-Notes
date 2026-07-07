@@ -1,10 +1,21 @@
 import { TranscriptionConfig } from '../types';
-import { jsonGet, jsonPost, providerRequest, sleep } from '../http';
+import { jsonGet, jsonPost, ProviderError, providerRequest, sleep } from '../http';
 import { TranscriptionProvider } from './index';
 import { pollTimeoutMs } from './limits';
 
 const INITIAL_DELAY_MS = 1000;
 const MAX_DELAY_MS = 8000;
+// A single transient poll failure (network blip, 5xx) must not fail a long-running
+// job that would otherwise have completed on the server. Tolerate this many
+// consecutive transient failures before giving up; a 4xx or AbortError still
+// rethrows immediately since retrying cannot fix those.
+const MAX_CONSECUTIVE_POLL_ERRORS = 3;
+
+function isTransientPollError(e: unknown): boolean {
+	if (e instanceof DOMException && e.name === 'AbortError') return false;
+	if (e instanceof ProviderError) return e.status === 0 || e.status >= 500;
+	return true;
+}
 
 interface UploadResponse {
 	upload_url?: string;
@@ -89,17 +100,28 @@ async function pollAssemblyAI(
 ): Promise<string> {
 	const start = Date.now();
 	let delay = INITIAL_DELAY_MS;
+	let consecutiveErrors = 0;
 	for (;;) {
 		const elapsed = Date.now() - start;
 		if (elapsed > timeoutMs) {
 			throw new Error(`assemblyai: poll timeout after ${Math.round(timeoutMs / 1000)}s`);
 		}
-		const status = await jsonGet<TranscriptStatusResponse>(
-			'assemblyai',
-			`https://api.assemblyai.com/v2/transcript/${id}`,
-			headers,
-			signal,
-		);
+		let status: TranscriptStatusResponse;
+		try {
+			status = await jsonGet<TranscriptStatusResponse>(
+				'assemblyai',
+				`https://api.assemblyai.com/v2/transcript/${id}`,
+				headers,
+				signal,
+			);
+			consecutiveErrors = 0;
+		} catch (e) {
+			consecutiveErrors++;
+			if (!isTransientPollError(e) || consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) throw e;
+			await sleep(delay, signal);
+			delay = Math.min(delay * 2, MAX_DELAY_MS);
+			continue;
+		}
 		if (status.status === 'completed') {
 			if (diarize && Array.isArray(status.utterances) && status.utterances.length > 0) {
 				return formatUtterances(status.utterances);

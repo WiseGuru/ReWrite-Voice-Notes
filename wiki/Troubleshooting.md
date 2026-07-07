@@ -8,12 +8,14 @@ Start here, then follow the link into the page with the detail for your problem.
 - **No templates in the dropdown.** You have not populated them yet. Settings, Templates, Populate. See [Quick start](Quick-Start).
 - **The plugin asks for a passphrase / says it is locked.** You are in passphrase encryption mode and the key is not unlocked. Enter your passphrase. See [Secrets and sync](Secrets-and-Sync).
 - **Keys disappeared after syncing to another device.** Encrypted keys do not decrypt cross-device in some modes; this is expected. Re-enter the key on that device, and consider excluding `secrets.json.nosync` from sync. See [Secrets and sync](Secrets-and-Sync).
+- **A notice says the secrets file looked corrupted.** A crash or sync conflict damaged `secrets.json.nosync`. The plugin preserves the damaged file as `secrets.json.nosync.corrupt` and starts fresh rather than risk overwriting it. Re-enter your keys. See [Secrets and sync](Secrets-and-Sync#if-the-secrets-file-gets-corrupted).
 
 ## Provider errors
 
 - **An error names the provider and an HTTP status.** That is the provider rejecting the request (bad key, wrong model id, rate limit, oversized audio). Read the message; it is attributed to the provider on purpose.
 - **"Maximum note length" / max-tokens error.** Your output cap is above the model's limit. Lower it in the profile. See [Providers](Providers).
 - **Recording too large.** You hit a provider's size or duration ceiling. Switch to a higher-ceiling provider (AssemblyAI, Rev.ai) or shorten the clip. Limits are listed in [Providers](Providers) and [Commands and menus](Commands-and-Menus).
+- **The "ReWrite: ..." progress notice seems stuck.** Click **Cancel** on the notice to stop the run. Note that a request already in flight to a provider can't be interrupted mid-transfer (Obsidian's networking layer has no cancel signal), so Cancel takes effect at the next stage boundary rather than instantly.
 
 ## Recording
 

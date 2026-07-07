@@ -1,5 +1,10 @@
 /* ReWrite plugin styles */
 
+.rewrite-notice-cancel {
+	display: block;
+	margin-top: 6px;
+}
+
 .rewrite-modal .rewrite-template-row {
 	display: flex;
 	flex-direction: column;
@@ -124,15 +129,6 @@
 	background-color: var(--background-modifier-error);
 	color: var(--text-on-accent);
 	font-size: var(--font-ui-small);
-}
-
-.rewrite-modal .rewrite-live-transcript {
-	min-height: 60px;
-	padding: 8px;
-	margin-top: 8px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 4px;
-	white-space: pre-wrap;
 }
 
 .rewrite-modal .rewrite-paste {

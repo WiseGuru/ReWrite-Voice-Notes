@@ -34,8 +34,9 @@ export function createMistralVoxtralTranscription(): TranscriptionProvider {
 			if (!config.model) throw new Error('mistral-voxtral: model is not configured');
 			let wavBuffer: ArrayBuffer;
 			try {
-				wavBuffer = await transcodeToWavPcm(audio);
+				wavBuffer = await transcodeToWavPcm(audio, undefined, signal);
 			} catch (e) {
+				if (e instanceof DOMException && e.name === 'AbortError') throw e;
 				const msg = e instanceof Error ? e.message : String(e);
 				throw new ProviderError('mistral-voxtral', 0, '', `Failed to transcode audio to WAV for Voxtral: ${msg}`);
 			}

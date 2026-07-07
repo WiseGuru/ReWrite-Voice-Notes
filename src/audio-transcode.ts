@@ -1,9 +1,24 @@
 export const TARGET_SAMPLE_RATE = 16000;
 
-export async function transcodeToWavPcm(audio: Blob, targetSampleRate: number = TARGET_SAMPLE_RATE): Promise<ArrayBuffer> {
+function abortIfSignaled(signal: AbortSignal | undefined): void {
+	if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+}
+
+// Decode + offline render can take multiple seconds for a long recording, with no
+// cancellation checks of its own; check the signal around each stage so a cancel requested
+// during transcode is observed promptly instead of only at the subsequent upload.
+export async function transcodeToWavPcm(
+	audio: Blob,
+	targetSampleRate: number = TARGET_SAMPLE_RATE,
+	signal?: AbortSignal,
+): Promise<ArrayBuffer> {
+	abortIfSignaled(signal);
 	const input = await audio.arrayBuffer();
+	abortIfSignaled(signal);
 	const decoded = await decodeAudio(input);
+	abortIfSignaled(signal);
 	const resampled = await resampleToMono(decoded, targetSampleRate);
+	abortIfSignaled(signal);
 	return encodeWav16(resampled, targetSampleRate);
 }
 

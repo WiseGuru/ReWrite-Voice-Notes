@@ -1,0 +1,24 @@
+{
+  "//": "Copy this file to dev-tools.config.json (gitignored) and fill in the paths. Shared by npm run review (local-review.mjs) and npm run release:prep (prepare-release-vault.mjs). No baked defaults, mirroring the plugin's LocalWhisperSettings philosophy: required paths are validated present + existsSync before use.",
+
+  "localReview": {
+    "//binaryPath": "Required. Path to llama-server. On this machine: C:\\Users\\whyno\\AppData\\Local\\Microsoft\\WinGet\\Packages\\ggml.llamacpp_Microsoft.Winget.Source_8wekyb3d8bbwe\\llama-server.exe",
+    "binaryPath": "",
+    "//modelPath": "Required. Path to the Ornith 1.0 gguf (a 35B-parameter Q4_K_M quant, ~19.7 GB). On this machine: Y:\\llm-models\\llamacpp\\gguf\\ornith-1.0-35b-Q4_K_M.gguf",
+    "modelPath": "",
+    "port": 8090,
+    "//extraArgs": "Optional extra llama-server flags, whitespace-split. A non-loopback --host is rejected before spawn (no auth/TLS).",
+    "extraArgs": "",
+    "//baseRef": "Branch/ref the diff is computed against (git merge-base <baseRef> HEAD, then diff to the working tree). Overridable per-run with --base <ref>.",
+    "baseRef": "master",
+    "//readyTimeoutMs": "How long to wait for the model to load before giving up. The Ornith model is large; raise this if you see spurious ready-timeout errors on a slow disk or with heavy GPU offload.",
+    "readyTimeoutMs": 60000,
+    "requestTimeoutMs": 300000,
+    "maxDiffChars": 60000
+  },
+
+  "releaseVault": {
+    "//vaultPath": "Required for npm run release:prep. A SCRATCH Obsidian vault for release testing, never a real personal one. The build's main.js/manifest.json/styles.css are copied into <vaultPath>/.obsidian/plugins/rewrite-voice-notes/.",
+    "vaultPath": ""
+  }
+}

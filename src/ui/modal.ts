@@ -1,11 +1,13 @@
 import { App, Modal, Notice, Platform } from 'obsidian';
 import type ReWritePlugin from '../main';
-import { runPipeline, PipelineSource, PipelineStage } from '../pipeline';
+import { runPipeline, PipelineSource } from '../pipeline';
 import { isMediaRecorderAvailable, resolveActiveProfile } from '../platform';
 import { Recorder } from '../recorder';
 import { DestinationOverride, EnvironmentProfile, InsertMode, NoteTemplate } from '../types';
 import { isProfileConfigured, isProfileConfiguredForText, renderSetupCard } from './setup-card';
 import { resolveActiveTextSource } from './text-source';
+import { formatDuration, runBackgroundPipeline, stageLabel } from './pipeline-progress';
+import { pickDefaultTemplateId } from '../templates-folder';
 
 // Continuous silence (ms) before the Record UI warns about a muted / dead mic.
 const SILENCE_WARNING_MS = 3000;
@@ -17,6 +19,13 @@ export class ReWriteModal extends Modal {
 	private recorder: Recorder | null = null;
 	private timerHandle: number | null = null;
 	private running = false;
+	// Hoisted from the old renderRecordTab closure local: a mid-recording render() (tab
+	// switch, template change, destination edit) used to rebuild the record tab with a
+	// fresh "Record" button while the old recorder/timer kept running with no way to stop
+	// them. Tab bar / template select / destination controls are now disabled while this
+	// (or `running`) is true, and the recording survives re-renders since it lives on the
+	// instance rather than a tab-local closure.
+	private isRecording = false;
 	private currentSource: PipelineSource | null = null;
 	private destinationOverride: DestinationOverride | null = null;
 	private destinationExpanded = false;
@@ -29,7 +38,7 @@ export class ReWriteModal extends Modal {
 		initialTemplateId?: string,
 	) {
 		super(app);
-		this.templateId = initialTemplateId ?? this.pickDefaultTemplateId();
+		this.templateId = initialTemplateId ?? pickDefaultTemplateId(this.plugin.settings, this.plugin.templates);
 	}
 
 	onOpen(): void {
@@ -42,16 +51,11 @@ export class ReWriteModal extends Modal {
 		this.contentEl.empty();
 	}
 
-	private pickDefaultTemplateId(): string {
-		const s = this.plugin.settings;
-		const templates = this.plugin.templates;
-		if (s.lastUsedTemplateId && templates.some((t) => t.id === s.lastUsedTemplateId)) {
-			return s.lastUsedTemplateId;
-		}
-		if (s.defaultTemplateId && templates.some((t) => t.id === s.defaultTemplateId)) {
-			return s.defaultTemplateId;
-		}
-		return templates[0]?.id ?? '';
+	// While a recording is in progress or a pipeline is running, template/destination/tab
+	// controls that would call render() must be disabled: a mid-flight render() would
+	// rebuild the tab body and orphan the recorder or the in-flight execute() progress UI.
+	private isLocked(): boolean {
+		return this.isRecording || this.running;
 	}
 
 	private render(): void {
@@ -165,7 +169,9 @@ export class ReWriteModal extends Modal {
 			opt.value = t.id;
 			if (t.id === this.templateId) opt.selected = true;
 		}
+		select.disabled = this.isLocked();
 		select.addEventListener('change', () => {
+			if (this.isLocked()) return;
 			this.templateId = select.value;
 			this.destinationOverride = null;
 			this.destinationExpanded = false;
@@ -209,7 +215,10 @@ export class ReWriteModal extends Modal {
 			opt.value = m.id;
 			if (m.id === effectiveMode) opt.selected = true;
 		}
+		const locked = this.isLocked();
+		select.disabled = locked;
 		select.addEventListener('change', () => {
+			if (this.isLocked()) return;
 			this.setDestinationOverride({ insertMode: select.value as InsertMode });
 			this.destinationExpanded = true;
 			this.render();
@@ -220,6 +229,7 @@ export class ReWriteModal extends Modal {
 			const folderInput = folderLabel.createEl('input', { type: 'text' });
 			folderInput.value = effectiveFolder;
 			folderInput.placeholder = '(vault root)';
+			folderInput.disabled = locked;
 			folderInput.addEventListener('change', () => {
 				this.setDestinationOverride({ newFileFolder: folderInput.value });
 			});
@@ -228,6 +238,7 @@ export class ReWriteModal extends Modal {
 			const nameInput = nameLabel.createEl('input', { type: 'text' });
 			nameInput.value = effectiveName;
 			nameInput.placeholder = 'ReWrite {{date}} {{time}}';
+			nameInput.disabled = locked;
 			nameInput.addEventListener('change', () => {
 				this.setDestinationOverride({ newFileNameTemplate: nameInput.value });
 			});
@@ -235,7 +246,9 @@ export class ReWriteModal extends Modal {
 
 		if (this.destinationOverride) {
 			const reset = body.createEl('button', { text: 'Reset to template default', cls: 'rewrite-destination-reset' });
+			reset.disabled = locked;
 			reset.addEventListener('click', () => {
+				if (this.isLocked()) return;
 				this.destinationOverride = null;
 				this.destinationExpanded = false;
 				this.render();
@@ -297,15 +310,22 @@ export class ReWriteModal extends Modal {
 		if (this.activeTab === 'record') record.addClass('is-active');
 		else if (this.activeTab === 'paste') paste.addClass('is-active');
 		else fromNote.addClass('is-active');
+		const locked = this.isLocked();
+		record.disabled = locked;
+		paste.disabled = locked;
+		fromNote.disabled = locked;
 		record.addEventListener('click', () => {
+			if (this.isLocked()) return;
 			this.activeTab = 'record';
 			this.render();
 		});
 		paste.addEventListener('click', () => {
+			if (this.isLocked()) return;
 			this.activeTab = 'paste';
 			this.render();
 		});
 		fromNote.addEventListener('click', () => {
+			if (this.isLocked()) return;
 			this.activeTab = 'fromNote';
 			this.render();
 		});
@@ -333,17 +353,23 @@ export class ReWriteModal extends Modal {
 		});
 		warning.hide();
 
-		let isRecording = false;
+		// isRecording is hoisted onto the instance (this.isRecording) rather than kept as a tab-local
+		// closure variable so it survives a render() the instant one is disallowed to fire: tab bar,
+		// template select, and destination controls are disabled via isLocked() for as long as it (or
+		// this.running) is true, so this record button is the only interactive control left.
 		const handleClick = async (): Promise<void> => {
+			// Only guard on a pipeline being in flight, not on isRecording: this button is what
+			// toggles isRecording, so gating on isLocked() here would make Stop unreachable the
+			// moment recording starts (isLocked() is true precisely because isRecording is true).
 			if (this.running) return;
-			if (!isRecording) {
+			if (!this.isRecording) {
 				try {
 					await this.beginCapture();
 				} catch (e) {
 					new Notice(e instanceof Error ? e.message : String(e));
 					return;
 				}
-				isRecording = true;
+				this.isRecording = true;
 				button.setText('Stop');
 				dot.show();
 				this.startTimerLoop(timer, warning);
@@ -351,7 +377,7 @@ export class ReWriteModal extends Modal {
 				button.disabled = true;
 				try {
 					const source = await this.endCapture();
-					isRecording = false;
+					this.isRecording = false;
 					button.setText('Record');
 					dot.hide();
 					warning.hide();
@@ -359,7 +385,7 @@ export class ReWriteModal extends Modal {
 					this.startRecordingPipeline(source);
 				} catch (e) {
 					new Notice(e instanceof Error ? e.message : String(e));
-					isRecording = false;
+					this.isRecording = false;
 					button.setText('Record');
 					dot.hide();
 					warning.hide();
@@ -380,12 +406,14 @@ export class ReWriteModal extends Modal {
 		textarea.rows = Platform.isMobile ? 4 : 10;
 		const button = parent.createEl('button', { text: 'Clean up', cls: 'mod-cta' });
 		button.addEventListener('click', () => {
+			if (this.running) return;
 			const text = textarea.value.trim();
 			if (!text) {
 				new Notice('Paste some text first.');
 				return;
 			}
-			void this.execute({ kind: 'paste', text });
+			button.disabled = true;
+			void this.execute({ kind: 'paste', text }).finally(() => { button.disabled = false; });
 		});
 		textarea.focus();
 	}
@@ -404,6 +432,7 @@ export class ReWriteModal extends Modal {
 		const button = parent.createEl('button', { text: 'Run', cls: 'mod-cta' });
 		if (!source) button.disabled = true;
 		button.addEventListener('click', () => {
+			if (this.running) return;
 			const fresh = resolveActiveTextSource(this.app);
 			if (!fresh) {
 				new Notice('Open a Markdown note or select text first.');
@@ -414,7 +443,8 @@ export class ReWriteModal extends Modal {
 				new Notice('Source text is empty.');
 				return;
 			}
-			void this.execute({ kind: 'text', text: fresh.text });
+			button.disabled = true;
+			void this.execute({ kind: 'text', text: fresh.text }).finally(() => { button.disabled = false; });
 		});
 	}
 
@@ -472,32 +502,24 @@ export class ReWriteModal extends Modal {
 		const app = this.app;
 		this.close();
 
-		const progress = new Notice('ReWrite: working...', 0);
-		void (async () => {
-			try {
-				await runPipeline({
-					app,
-					settings: plugin.settings,
-					host: plugin,
-					profile,
-					template,
-					source,
-					destinationOverride,
-					contextHint,
-					onStage: (stage) => progress.setMessage(`ReWrite: ${stageLabel(stage)}`),
-				});
-				progress.hide();
-				plugin.settings.lastUsedTemplateId = template.id;
-				await plugin.saveSettings();
-				new Notice('ReWrite complete.');
-			} catch (e) {
-				progress.hide();
-				new Notice(`ReWrite: ${e instanceof Error ? e.message : String(e)}`);
-			}
-		})();
+		void runBackgroundPipeline(
+			plugin,
+			{
+				app,
+				settings: plugin.settings,
+				host: plugin,
+				profile,
+				template,
+				source,
+				destinationOverride,
+				contextHint,
+			},
+			{ startMessage: 'ReWrite: working...', templateId: template.id },
+		);
 	}
 
 	private async execute(source: PipelineSource): Promise<void> {
+		if (this.running) return;
 		const template = this.plugin.templates.find((t) => t.id === this.templateId);
 		if (!template) {
 			new Notice('Please pick a template.');
@@ -554,26 +576,6 @@ export class ReWriteModal extends Modal {
 		setting.open();
 		setting.openTabById(this.plugin.manifest.id);
 	}
-}
-
-function stageLabel(stage: PipelineStage): string {
-	switch (stage) {
-		case 'persist-audio':
-			return 'Saving audio...';
-		case 'transcribe':
-			return 'Transcribing...';
-		case 'cleanup':
-			return 'Cleaning up...';
-		case 'insert':
-			return 'Inserting...';
-	}
-}
-
-function formatDuration(ms: number): string {
-	const total = Math.max(0, Math.floor(ms / 1000));
-	const minutes = Math.floor(total / 60);
-	const seconds = total % 60;
-	return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
 function describeDestination(mode: InsertMode, folder: string, nameTemplate: string): string {

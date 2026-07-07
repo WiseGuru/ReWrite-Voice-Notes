@@ -188,7 +188,7 @@ export class WhisperHost {
 		if (!api.fs.existsSync(config.modelPath)) {
 			throw new Error(`Model not found: ${config.modelPath}`);
 		}
-		const port = Number.isFinite(config.port) && config.port > 0 ? config.port : 8080;
+		const port = resolvePort(config);
 		// Discover any existing server on the configured port before spawning.
 		const probed = await this.probe(config);
 		if (probed.status === 'running') {
@@ -212,14 +212,15 @@ export class WhisperHost {
 		// silently expose an open transcription service to the LAN, and pin
 		// 127.0.0.1 ourselves when the user did not specify a host (so we don't
 		// rely on upstream's default binding staying loopback).
-		const hostArg = getHostArg(extra);
-		if (hostArg !== null && !isLoopbackHost(hostArg)) {
-			throw new Error(`Refusing to start: --host ${hostArg || '(empty)'} would bind whisper-server to a non-loopback interface, exposing an unauthenticated transcription server to your network. Remove it from Extra args; ReWrite always binds 127.0.0.1.`);
+		const hostArgs = getHostArgs(extra);
+		const badHost = hostArgs.find((h) => !isLoopbackHost(h));
+		if (badHost !== undefined) {
+			throw new Error(`Refusing to start: --host ${badHost || '(empty)'} would bind whisper-server to a non-loopback interface, exposing an unauthenticated transcription server to your network. Remove it from Extra args; ReWrite always binds 127.0.0.1.`);
 		}
 		const args = [
 			'-m', config.modelPath,
 			'--port', String(port),
-			...(hostArg === null ? ['--host', '127.0.0.1'] : []),
+			...(hostArgs.length === 0 ? ['--host', '127.0.0.1'] : []),
 			...extra,
 		];
 		const child = api.cp.spawn(config.binaryPath, args, {
@@ -299,24 +300,40 @@ export class WhisperHost {
 
 			await new Promise<void>((resolve) => {
 				let settled = false;
+				const killTimer = window.setTimeout(() => {
+					try { child.kill('SIGKILL'); } catch { /* best effort */ }
+					finish();
+				}, STOP_KILL_GRACE_MS);
 				const finish = (): void => {
 					if (settled) return;
 					settled = true;
+					window.clearTimeout(killTimer);
 					resolve();
 				};
 				child.once('exit', finish);
 				try { child.kill(); } catch { /* best effort */ }
-				window.setTimeout(() => {
-					try { child.kill('SIGKILL'); } catch { /* best effort */ }
-					finish();
-				}, STOP_KILL_GRACE_MS);
 			});
 			await this.clearPidFile();
 			return;
 		}
-		// Adopted (no live child handle) or stopped: kill via PID if we have one.
+		// Adopted (no live child handle) or stopped: kill via PID if we have one. The sidecar's
+		// PID could have been recycled by the OS for an unrelated process since we adopted it
+		// (e.g. after an OS crash), so re-verify the port is still bound to *something* right
+		// before killing by PID: if it isn't, whatever we adopted is already gone, and sending a
+		// signal to the stale PID would risk hitting a process that has nothing to do with it.
+		// This narrows, but does not eliminate, the PID-reuse window (a full port-plus-PID
+		// collision is far less likely than a bare PID collision).
 		const api = getNodeApi();
 		const pid = this.currentPid;
+		const port = this.currentPort;
+		if (pid !== null && api && port !== null && !(await isPortReachable(api.net, port))) {
+			this.statusValue = 'stopped';
+			this.currentPort = null;
+			this.currentPid = null;
+			this.ownershipValue = null;
+			await this.clearPidFile();
+			return;
+		}
 		if (pid !== null && api) {
 			this.stoppingDeliberately = true;
 			this.statusValue = 'stopped';
@@ -349,7 +366,7 @@ export class WhisperHost {
 		if (!api) return this.snapshot();
 		// If we already own a spawned child, leave state alone.
 		if (this.child && this.statusValue === 'running') return this.snapshot();
-		const port = Number.isFinite(config.port) && config.port > 0 ? config.port : 8080;
+		const port = resolvePort(config);
 		const reachable = await isPortReachable(api.net, port);
 		if (!reachable) {
 			// Nothing bound. Clear any stale sidecar and reset to stopped if we
@@ -430,6 +447,12 @@ export class WhisperHost {
 	}
 }
 
+// A port above 65535 previously fell through to the ready-timeout path with a confusing "did not
+// become ready" error rather than a clear validation message.
+function resolvePort(config: LocalWhisperSettings): number {
+	return Number.isFinite(config.port) && config.port > 0 && config.port <= 65535 ? config.port : 8080;
+}
+
 function isPidAlive(proc: ProcessAPI, pid: number): boolean {
 	try {
 		proc.kill(pid, 0);
@@ -445,25 +468,29 @@ function splitArgs(s: string): string[] {
 	return trimmed.split(/\s+/);
 }
 
-// Find the value of a --host argument in an already-tokenized arg list.
-// Supports both `--host 127.0.0.1` and `--host=127.0.0.1`. Returns the value
-// (possibly empty string) when present, or null when no --host is given.
-function getHostArg(args: string[]): string | null {
+// Find the values of ALL --host arguments in an already-tokenized arg list.
+// Supports both `--host 127.0.0.1` and `--host=127.0.0.1`. Every occurrence
+// must be collected, not just the first: whisper-server (like most CLI
+// parsers) honors the LAST --host, so checking only the first would let
+// `--host 127.0.0.1 --host 0.0.0.0` slip past the loopback guard. Values may
+// be empty strings. Exported for tests.
+export function getHostArgs(args: string[]): string[] {
+	const hosts: string[] = [];
 	for (let i = 0; i < args.length; i++) {
 		const a = args[i];
 		if (a === '--host') {
-			return args[i + 1] ?? '';
-		}
-		if (a !== undefined && a.startsWith('--host=')) {
-			return a.slice('--host='.length);
+			hosts.push(args[i + 1] ?? '');
+		} else if (a !== undefined && a.startsWith('--host=')) {
+			hosts.push(a.slice('--host='.length));
 		}
 	}
-	return null;
+	return hosts;
 }
 
 // Whether a host value binds only the loopback interface. Anything else
 // (0.0.0.0, a LAN IP, a hostname) would expose the unauthenticated server.
-function isLoopbackHost(host: string): boolean {
+// Exported for tests.
+export function isLoopbackHost(host: string): boolean {
 	const h = host.trim().toLowerCase();
 	return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]';
 }

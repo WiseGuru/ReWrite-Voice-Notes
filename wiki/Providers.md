@@ -25,7 +25,7 @@ For fully local setups, see [Self-hosting: whisper.cpp](Self-Hosting-Whisper) an
 | Anthropic Claude (`anthropic`) | Yes | Yes | Calls go through Obsidian's `requestUrl` (no browser CORS). |
 | OpenAI GPT (`openai`) | Yes | Yes | Reasoning models (o-series, gpt-5) handled automatically. |
 | OpenAI-compatible (`openai-compatible`) | Yes | No (type the id) | Cloud or local; base URL must include the version path. |
-| Google Gemini (`gemini`) | Yes | Yes | Silently clamps overlong output rather than erroring. |
+| Google Gemini (`gemini`) | Yes | Yes | Reports the same "Maximum note length" error as other providers when the cap is too high. |
 | Mistral (`mistral`) | Yes | Yes | |
 | None (`none`) | n/a | n/a | Skips cleanup; inserts the raw transcript. |
 
@@ -44,7 +44,7 @@ Whatever the control, the value saved is the model id sent to the provider.
 
 ## Maximum note length (output cap)
 
-"Maximum note length" frames the LLM's output-token cap in minutes of speech. If the cap is set higher than a model's own output ceiling, OpenAI and Anthropic return a friendly error pointing back at this setting; Gemini silently truncates instead. The Advanced "LLM max tokens" field edits the same value raw.
+"Maximum note length" frames the LLM's output-token cap in minutes of speech. If the cap is set higher than a model's own output ceiling, every provider (including Gemini) returns a friendly error pointing back at this setting rather than silently truncating the note. The Advanced "LLM max tokens" field edits the same value raw.
 
 ## OpenAI-compatible base URLs
 

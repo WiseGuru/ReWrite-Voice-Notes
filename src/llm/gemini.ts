@@ -50,11 +50,25 @@ export function createGeminiLLM(): LLMProvider {
 			if (candidate?.finishReason === 'SAFETY') {
 				throw new Error('gemini: response blocked by safety filter');
 			}
-			const text = candidate?.content?.parts?.[0]?.text;
-			if (typeof text !== 'string') {
+			if (candidate?.finishReason === 'RECITATION') {
+				throw new Error('gemini: response blocked (matched a recitation/citation filter)');
+			}
+			if (candidate?.finishReason === 'PROHIBITED_CONTENT') {
+				throw new Error('gemini: response blocked (prohibited content)');
+			}
+			if (candidate?.finishReason === 'MAX_TOKENS') {
+				throw new Error(
+					'gemini: the requested note length exceeds this model\'s output limit. '
+					+ 'Lower "Maximum note length" in settings, or choose a model with a higher output cap.',
+				);
+			}
+			// Gemini can split a response across multiple parts; concatenate all of them rather
+			// than reading only parts[0], which would silently truncate long notes at the boundary.
+			const parts = candidate?.content?.parts;
+			if (!parts || parts.length === 0) {
 				throw new Error(`gemini: response missing text (finishReason=${candidate?.finishReason ?? 'unknown'})`);
 			}
-			return text.trim();
+			return parts.map((p) => p.text ?? '').join('').trim();
 		},
 		async listModels(config, signal) {
 			if (!config.apiKey) throw new Error('gemini: API key is not configured');

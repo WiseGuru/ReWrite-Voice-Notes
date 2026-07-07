@@ -208,7 +208,11 @@ async function cleanupTranscript(params: PipelineParams, transcript: string): Pr
 // block IS present it is always stripped from the body, even if its YAML is malformed
 // (the model emitted a properties block, not content); strict parse falls back to a
 // tolerant line-based read so a stray quote does not drop every value.
-function extractFromBlock(
+// The fence must carry the yaml/yml tag (the prompt contract always specifies
+// ```yaml): a bare ``` fence is treated as content, so a model that wraps its whole
+// reply in a plain code fence does not have the entire note swallowed as "the block".
+// Exported for tests.
+export function extractFromBlock(
 	raw: string,
 	specs: NotePropertySpec[],
 	wantsTitle: boolean,
@@ -216,7 +220,7 @@ function extractFromBlock(
 	const properties: Record<string, string> = {};
 	for (const spec of specs) properties[spec.name] = '';
 
-	const fence = /^\s*```(?:ya?ml)?\s*\n([\s\S]*?)\n```[ \t]*\n?/;
+	const fence = /^\s*```ya?ml[ \t]*\n([\s\S]*?)\n```[ \t]*\n?/;
 	const match = raw.match(fence);
 	if (!match) return { body: raw.trim(), properties };
 
@@ -252,7 +256,11 @@ function extractFromBlock(
 		// Tolerant fallback: read `key: value` lines directly and trim surrounding
 		// quotes, so a single malformed value does not blank the whole scaffold.
 		for (const line of block.split(/\r?\n/)) {
-			const m = /^\s*([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
+			// The key is matched up to the first colon (not restricted to ASCII word chars) so a
+			// declared property name with a space or non-ASCII character still round-trips through
+			// this fallback; a spurious match against a prose line is harmless because the result is
+			// only kept when it's in `allowed` or is the reserved title key.
+			const m = /^\s*([^:\n]+?)\s*:\s*(.*)$/.exec(line);
 			if (!m) continue;
 			const key = m[1] ?? '';
 			const val = stripQuotes((m[2] ?? '').trim());

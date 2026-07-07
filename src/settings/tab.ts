@@ -178,8 +178,17 @@ export class ReWriteSettingTab extends PluginSettingTab {
 		this.renderKnownNouns(containerEl);
 	}
 
+	// Central save chokepoint for every settings field's onChange. Fields call this without
+	// awaiting or catching (Obsidian's Setting components fire-and-forget the async handler),
+	// so a save failure (e.g. the OS keyring becoming unavailable mid-session while writing an
+	// API key) would otherwise be an unhandled rejection with zero user-visible feedback.
 	private async commit(): Promise<void> {
-		await this.plugin.saveSettings();
+		try {
+			await this.plugin.saveSettings();
+		} catch (e) {
+			console.error('ReWrite: failed to save settings', e);
+			new Notice(`ReWrite: could not save settings — ${e instanceof Error ? e.message : String(e)}`);
+		}
 	}
 
 	// Builds a section heading with a Lucide icon prepended to its label. Returns the
