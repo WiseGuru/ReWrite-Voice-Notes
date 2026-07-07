@@ -39,7 +39,7 @@ Decisions taken:
 
 ### 4. Docs
 - [CLAUDE.md](../CLAUDE.md) "Secrets encryption" section: reduce the mode list to two, update the envelope description, rewrite the first-run-fallback note (now passphrase-unconfigured, not plaintext), and note that existing dev installs in plaintext lose stored keys (re-enter; per the pre-release no-migration rule).
-- [docs/claude-scratch/STATUS.md](claude-scratch/STATUS.md): add a future-work / decision entry: "Adopt Obsidian SecretStorage (`app.secretStorage`, 1.11.4+) as an encryption mode once GA and available on mobile. Deferred 2026-05-28 (early-access). Would become the zero-config option that plaintext used to provide."
+- Tracker (historical: `docs/claude-scratch/STATUS.md`, now retired in favor of [docs/ROADMAP.md](ROADMAP.md)): add a future-work / decision entry: "Adopt Obsidian SecretStorage (`app.secretStorage`, 1.11.4+) as an encryption mode once GA and available on mobile. Deferred 2026-05-28 (early-access). Would become the zero-config option that plaintext used to provide."
 - Sweep `plaintext` across the repo (docs + `styles.css`) and update any user-facing copy. `styles.css` `.is-warning` stays used (reassigned to the unconfigured-passphrase banner).
 
 ## Reuse (do not write new)

@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npm run *)",
       "WebSearch",
-      "WebFetch(domain:docs.obsidian.md)"
+      "WebFetch(domain:docs.obsidian.md)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }
