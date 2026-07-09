@@ -22,9 +22,11 @@ export interface TranscriptionConfig {
 	baseUrl: string;
 	model: string;
 	language: string;
-	// Opt-in speaker diarization. Only honored by providers that support it
-	// (assemblyai, deepgram, revai); ignored by the rest. When on, the capable
-	// adapter embeds `Speaker X:` labels into the returned transcript string.
+	// Internal pipeline->adapter transport for speaker diarization. Set per
+	// invocation by the pipeline (from the template's `diarize` flag OR the modal's
+	// per-run toggle), NOT a persisted user setting. Only honored by capable
+	// providers (assemblyai, deepgram, revai); when on, the adapter embeds
+	// `Speaker X:` labels into the returned transcript string.
 	diarize?: boolean;
 }
 
@@ -52,10 +54,12 @@ export interface NoteTemplate {
 	// absent/false means the field is hidden. NOTE the polarity is the reverse
 	// of disableSharedCore (positive opt-in, not negative opt-out).
 	enableContextHint?: boolean;
-	// When true, forces speaker diarization on for this template's transcription,
-	// regardless of the profile's "Identify speakers" toggle. Only effective on
+	// When true, this template defaults speaker diarization ON (e.g. Meeting
+	// transcript). It seeds the modal's per-invocation "Identify speakers" toggle,
+	// which the user can still override for a single run. Only effective on
 	// diarization-capable providers (assemblyai/deepgram/revai); a no-op on the
-	// rest. Absent/false means the profile setting governs.
+	// rest. Absent/false means the toggle defaults off. There is no profile-wide
+	// diarization setting anymore.
 	diarize?: boolean;
 	// When true, the LLM generates this note's title (filename) from the content and
 	// any provided context, returned via a reserved `noteTitle` key in the same leading
@@ -67,6 +71,14 @@ export interface NoteTemplate {
 	// instruction). Parsed into an ordered array (order drives both the prompt and
 	// the write order). Applied only for insertMode 'newFile'.
 	noteProperties?: NotePropertySpec[];
+	// Tri-state ownership marker for built-in-derived files. `true` (written by
+	// Populate/Update on the files they create or reconcile) means the file is
+	// plugin-managed and Update may reconcile it against the current built-in.
+	// `false` means the user untracked it: Update must never touch it again.
+	// `undefined` (key absent/empty, e.g. files created before this flag existed)
+	// is treated as managed when the id matches a built-in, preserving the old
+	// behavior. Ignored entirely for ids not in the default set.
+	managed?: boolean;
 }
 
 export interface NotePropertySpec {
@@ -97,6 +109,16 @@ export interface EnvironmentProfile {
 	transcriptionConfig: TranscriptionConfig;
 	llmProvider: LLMProviderID;
 	llmConfig: LLMConfig;
+	// Real-time (streaming) transcription is configured entirely independently of batch
+	// transcription: its own provider, key, and model. A user can run e.g. Voxtral for batch,
+	// AssemblyAI for realtime, and Anthropic for cleanup. `realtimeProvider` is 'none' (off)
+	// or a realtime-capable provider (assemblyai/deepgram, per
+	// transcriptionProviderSupportsRealtime). `realtimeConfig` holds its key + model (reuses
+	// the TranscriptionConfig shape; `language`/`diarize` unused). Realtime models often
+	// differ from batch (e.g. a distinct streaming model id), which is why this is separate
+	// rather than reusing transcriptionProvider/transcriptionConfig.
+	realtimeProvider: TranscriptionProviderID;
+	realtimeConfig: TranscriptionConfig;
 }
 
 export type ActiveProfileOverride = 'auto' | 'desktop' | 'mobile';
@@ -119,6 +141,22 @@ export interface LocalWhisperSettings {
 	modelPath: string;
 	port: number;
 	extraArgs: string;
+	// Phase B lifecycle knobs. autoStart spawns the server once the workspace is
+	// ready (desktop + whisper-local profile only). idleStopMinutes > 0 stops a
+	// ReWrite-owned (spawned/adopted, never external) server after that many
+	// minutes without a transcription; 0 disables idle stop.
+	autoStart: boolean;
+	idleStopMinutes: number;
+}
+
+// One auto-ingest rule: a vault folder scanned on demand by the
+// process-ingest-folders command, each audio file run through the pipeline with
+// the preassigned template (newFile-mode only), then moved to the attachments
+// location on success (move-on-success is the dedupe; failures stay put).
+export interface IngestRule {
+	folderPath: string;
+	templateId: string;
+	enabled: boolean;
 }
 
 export interface GlobalSettings {
@@ -139,4 +177,13 @@ export interface GlobalSettings {
 	knownNounsPath: string;
 	modelCache: ModelCache;
 	localWhisper: LocalWhisperSettings;
+	// When true (desktop only), the main modal's Record button hands capture off to
+	// the Quick Record floating UI (carrying the modal's template, destination
+	// override, and context hint) so Obsidian stays usable while recording.
+	recordInBackground: boolean;
+	// Built-in default templates the user disabled: Populate and Update never
+	// (re)create these ids. Keyed by frontmatter id (canonical; survives renames).
+	disabledDefaultTemplateIds: string[];
+	// Auto-ingest folder rules for the process-ingest-folders command.
+	ingestRules: IngestRule[];
 }

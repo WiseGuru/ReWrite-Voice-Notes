@@ -33,6 +33,10 @@ export interface PipelineParams {
 	// surfaced for templates with `enableContextHint`. Injected as a `## Context`
 	// system-prompt block when non-empty; the pipeline does not check the flag.
 	contextHint?: string;
+	// Per-invocation speaker-diarization toggle (from the modal). OR-ed with the template's
+	// `diarize` flag and gated by provider capability. There is no persisted profile setting
+	// for diarization anymore; it is chosen per run (template default + this toggle).
+	diarize?: boolean;
 	onStage?: (stage: PipelineStage) => void;
 	signal?: AbortSignal;
 }
@@ -104,13 +108,13 @@ async function collectTranscript(params: PipelineParams): Promise<string> {
 			validateRecording(source.audio.size, source.durationMs, params.profile.transcriptionProvider);
 			params.onStage?.('transcribe');
 			const provider = createTranscriptionProvider(params.profile.transcriptionProvider);
-			// A template can force diarization on (e.g. the Meeting transcript
-			// default). Only merge it when the provider can actually diarize;
-			// otherwise leave the profile config untouched (no-op on the rest).
-			const config = params.template.diarize
-				&& transcriptionProviderSupportsDiarization(params.profile.transcriptionProvider)
-				? { ...params.profile.transcriptionConfig, diarize: true }
-				: params.profile.transcriptionConfig;
+			// Diarization is chosen per invocation: the template's `diarize` flag (e.g. the
+			// Meeting transcript default) OR the modal's per-run toggle, gated by provider
+			// capability. There is no persisted profile setting; diarize is always set
+			// explicitly here so a stale value from an older data.json can't leak through.
+			const effectiveDiarize = (params.template.diarize || params.diarize === true)
+				&& transcriptionProviderSupportsDiarization(params.profile.transcriptionProvider);
+			const config = { ...params.profile.transcriptionConfig, diarize: effectiveDiarize };
 			return provider.transcribe(source.audio, config, params.signal, source.durationMs);
 		}
 	}

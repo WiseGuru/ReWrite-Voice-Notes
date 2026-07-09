@@ -10,6 +10,7 @@
 - [Commands and menus](Commands-and-Menus)
 - [Creating templates](Creating-Templates)
 - [Providers](Providers)
+- [Voxtral real-time (disabled)](Voxtral-Realtime)
 
 **Self-hosting**
 - [whisper.cpp](Self-Hosting-Whisper)

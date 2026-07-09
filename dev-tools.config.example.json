@@ -14,7 +14,9 @@
     "//readyTimeoutMs": "How long to wait for the model to load before giving up. The Ornith model is large; raise this if you see spurious ready-timeout errors on a slow disk or with heavy GPU offload.",
     "readyTimeoutMs": 60000,
     "requestTimeoutMs": 300000,
-    "maxDiffChars": 60000
+    "maxDiffChars": 60000,
+    "//maxOutputTokens": "Cap on the model's findings length. Raise it if a review is cut off mid-sentence; make sure --ctx-size in extraArgs leaves room for the prompt plus this many output tokens.",
+    "maxOutputTokens": 8192
   },
 
   "releaseVault": {

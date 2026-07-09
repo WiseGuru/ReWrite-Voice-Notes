@@ -34,6 +34,7 @@ Keep this file current: when a feature is added or changed, add or update its it
 - [ ] **Destination** override: changing insert mode / folder / filename affects this run only; "Reset to template default" clears it; the template file on disk is unchanged. Result: ____
 - [ ] **Context hint**: the `<details>` appears only for a template with `enableContextHint`; the typed hint reaches the LLM (visible in the result); resets on template change. Result: ____
 - [ ] Setup card blocks Record/Paste when the active profile is unconfigured, with the right voice-vs-text messaging. Result: ____
+- [ ] **Record in background** (desktop): the checkbox shows on the Record tab, persists across reopen; ticking it and pressing Record closes the modal and continues in the Quick Record floater carrying the template/destination/context; hidden on mobile. Result: ____
 
 ## 3. Templates
 
@@ -44,7 +45,8 @@ Keep this file current: when a feature is added or changed, add or update its it
 - [ ] **Note properties**: a template with `noteProperties` writes the declared keys into the new note's frontmatter (newFile only). Result: ____
 - [ ] **Note title** (`titleFromContent`): the LLM-generated title names the new file via `{{title}}` / whole-name; falls back to the static name when unusable. Result: ____
 - [ ] `disableSharedCore: true` runs a template without the shared-core preface (and settings shows the warning line naming it). Result: ____
-- [ ] `diarize: true` on a template forces speaker labels on a capable provider. Result: ____
+- [ ] **Diarization is per-invocation**: the modal shows an "Identify speakers" checkbox only on a capable provider (AssemblyAI/Deepgram/Rev.ai), defaulting to the template's `diarize` flag (on for Meeting transcript); it can be unticked per run; there is no "Identify speakers" toggle in Settings; a non-diarize template (e.g. Daily note) produces no `Speaker` labels. Result: ____
+- [ ] **Manage built-in templates**: each row has a clearly-labelled Enabled switch (caption reads "Enabled" when on, "Disabled" when off) and a Tracked checkbox with its label to the LEFT of the box (reads "Tracked" when checked, "Untracked" when unchecked); turning Enabled off (confirm modal) removes the file and Populate/Update no longer re-add it; turning it back on restores it; unchecking Tracked writes `managed: false` and Update then leaves it untouched (reported as untracked). Result: ____
 
 ## 4. Transcription providers
 
@@ -68,6 +70,8 @@ Keep this file current: when a feature is added or changed, add or update its it
 - [ ] A non-loopback `--host` in Extra args is refused before spawn. Result: ____
 - [ ] Restarting Obsidian adopts the orphaned server (status shows "adopted from previous session"); an externally-started server shows "external" and Stop is disabled. Result: ____
 - [ ] Status-bar item is hidden on mobile / when the active profile isn't whisper-local. Result: ____
+- [ ] **Start automatically**: with the toggle on and the profile using whisper-local, the server starts on Obsidian launch (a still-running one is adopted, not doubled). Result: ____
+- [ ] **Stop when idle**: with a small minutes value set, the server stops after that idle time; it never stops mid-transcription or an externally-started server. Result: ____
 
 ## 7. Known nouns / assistant prompt (wake name)
 
@@ -102,13 +106,32 @@ Keep this file current: when a feature is added or changed, add or update its it
 - [ ] Template popover: opens, is keyboard-navigable (Arrow/Escape), dismisses on selection / outside click / when processing starts. Result: ____
 - [ ] Cancel works both during capture and during post-capture processing (aborts the pipeline). Result: ____
 
-## 12. Mobile
+## 12. Real-time transcription
+
+- [ ] `Real-time transcription (start/stop)` requires a **Real-time provider** set (AssemblyAI/Deepgram, independent of the batch transcription provider; errors with a steer otherwise), its real-time key set, and an open Markdown note. Verify the batch provider and real-time provider can differ (e.g. batch Voxtral + real-time AssemblyAI). Result: ____
+- [ ] Settings shows a self-contained **Real-time transcription** section: a Real-time provider dropdown (None + realtime-capable only, so **only AssemblyAI/Deepgram, NOT Voxtral**) that re-renders on change, plus key + adaptive model field when a provider is picked; the model field is a dropdown with Refresh for Deepgram and a text field for AssemblyAI; the key persists/hydrates across reload under its own secret. Result: ____
+- [ ] AssemblyAI/Deepgram: starting shows the floating bar (dot + rolling interim text + Stop); spoken words appear at the cursor as finalized segments; interim text is never inserted. Result: ____
+- [ ] **Voxtral real-time is NOT offered** (pulled: not WebView-reachable). Confirm it is absent from the Real-time provider dropdown. (The adapter stays on disk, unwired.) Result: ____
+- [ ] Stop flushes the last segment and closes the connection; running the command again while active stops it. Result: ____
+
+## 13. Auto-ingest folders
+
+- [ ] Settings "Auto-ingest folders": Add opens the rule popup; the template dropdown lists only newFile templates; rules list with enable toggle / Edit / Delete. Result: ____
+- [ ] `Process auto-ingest folders` processes each audio file in an enabled folder with that rule's template, one at a time, behind a sticky Notice with Cancel. Result: ____
+- [ ] On success each recording is moved to the attachments location and its note's `![[embed]]` still resolves; a re-run does not reprocess it. Result: ____
+- [ ] A file that fails stays in the ingest folder and is retried next run; the summary Notice reports processed/failed counts **and** a second sticky Notice lists the concrete failure reason per file (first 5, then "…and N more"). Result: ____
+- [ ] **Ingest folder == recordings/attachments folder** is caught UP FRONT: setting a rule's folder to the same folder recordings are stored in (either the ReWrite Attachments folder, or Obsidian's own attachment folder when ReWrite's is blank) skips the rule with a clear "this folder is also where recordings are stored; point the rule at a different folder" Notice BEFORE any note is created. Result: ____
+- [ ] **Move-after-success failure**: if the note is created but the recording can't be moved out, the error says the note was created and to move/delete the source manually (so it isn't reprocessed). Result: ____
+
+## 14. Mobile
 
 - [ ] On mobile, whisper-local and other desktop-only options are absent from dropdowns. Result: ____
 - [ ] Modals pin to the top so fields stay above the soft keyboard; Paste textarea is shorter (rows=4). Result: ____
 - [ ] Record + Paste paths work on mobile. Result: ____
+- [ ] While recording on mobile, a yellow "keep Obsidian in the foreground" caution shows in the Record tab and the Quick Record floater; it's absent on desktop and hidden once processing starts. Result: ____
+- [ ] Auto-ingest and real-time transcription work on mobile (both are cross-platform). Result: ____
 
-## 13. Misc
+## 15. Misc
 
 - [ ] Errors surface as provider-attributed Notices; no secret leaks into a Notice or log (query strings redacted). Result: ____
 - [ ] Cancelling a run (modal / Quick Record) leaves the persisted audio file as the recovery path and writes nothing further. Result: ____

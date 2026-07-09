@@ -1,6 +1,6 @@
 {
 	"name": "rewrite-voice-notes",
-	"version": "1.1.1",
+	"version": "1.2.0",
 	"description": "Record or paste speech and have it transcribed and structured by AI.",
 	"main": "main.js",
 	"type": "module",
@@ -11,6 +11,7 @@
 		"lint": "eslint .",
 		"test": "vitest run",
 		"review": "node local-review.mjs",
+		"review:docs": "node local-review.mjs --docs",
 		"release:prep": "node prepare-release-vault.mjs"
 	},
 	"keywords": [],

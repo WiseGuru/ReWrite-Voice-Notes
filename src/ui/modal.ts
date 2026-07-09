@@ -8,10 +8,15 @@ import { isProfileConfigured, isProfileConfiguredForText, renderSetupCard } from
 import { resolveActiveTextSource } from './text-source';
 import { formatDuration, runBackgroundPipeline, stageLabel } from './pipeline-progress';
 import { pickDefaultTemplateId } from '../templates-folder';
+import { transcriptionProviderSupportsDiarization } from '../transcription';
 
 // Continuous silence (ms) before the Record UI warns about a muted / dead mic.
 const SILENCE_WARNING_MS = 3000;
 const SILENCE_WARNING_TEXT = 'No audio detected. Check that your microphone is on and not muted.';
+// Shown on mobile for the duration of a recording: backgrounding the app suspends the
+// Capacitor WebView, which stops MediaRecorder mid-capture (the screen wake lock prevents
+// screen-sleep but cannot prevent an app switch).
+const MOBILE_RECORD_WARNING_TEXT = 'Keep Obsidian in the foreground while recording. Switching to another app stops the capture and the recording may be lost.';
 
 export class ReWriteModal extends Modal {
 	private templateId: string;
@@ -31,6 +36,10 @@ export class ReWriteModal extends Modal {
 	private destinationExpanded = false;
 	private contextHint = '';
 	private contextExpanded = false;
+	// Per-invocation speaker-diarization choice. Defaults to the active template's `diarize`
+	// flag (reset on template change), and the user can toggle it for this run. There is no
+	// persisted profile setting anymore.
+	private diarize = false;
 
 	constructor(
 		app: App,
@@ -39,6 +48,7 @@ export class ReWriteModal extends Modal {
 	) {
 		super(app);
 		this.templateId = initialTemplateId ?? pickDefaultTemplateId(this.plugin.settings, this.plugin.templates);
+		this.diarize = !!this.activeTemplate()?.diarize;
 	}
 
 	onOpen(): void {
@@ -81,6 +91,7 @@ export class ReWriteModal extends Modal {
 		this.renderTemplateSelector(contentEl);
 		this.renderDestinationSelector(contentEl);
 		this.renderContextSelector(contentEl);
+		this.renderDiarizeToggle(contentEl);
 		this.renderTabBar(contentEl);
 		const tabBody = contentEl.createDiv({ cls: 'rewrite-tab-body' });
 
@@ -177,6 +188,7 @@ export class ReWriteModal extends Modal {
 			this.destinationExpanded = false;
 			this.contextHint = '';
 			this.contextExpanded = false;
+			this.diarize = !!this.activeTemplate()?.diarize;
 			this.render();
 		});
 	}
@@ -302,6 +314,30 @@ export class ReWriteModal extends Modal {
 		});
 	}
 
+	// Per-invocation "Identify speakers" toggle, shown only when the active profile's
+	// transcription provider supports diarization. Defaults to the template's `diarize`
+	// flag; the user can override it for this run. Only affects audio transcription.
+	private renderDiarizeToggle(parent: HTMLElement): void {
+		const { profile } = resolveActiveProfile(this.plugin.settings);
+		if (!transcriptionProviderSupportsDiarization(profile.transcriptionProvider)) return;
+
+		const row = parent.createDiv({ cls: 'rewrite-diarize-row' });
+		const label = row.createEl('label', { cls: 'rewrite-diarize-label' });
+		const checkbox = label.createEl('input', { type: 'checkbox' });
+		checkbox.checked = this.diarize;
+		checkbox.disabled = this.isLocked();
+		label.createSpan({
+			text: 'Identify speakers (label each voice; good for meetings, off for daily notes)',
+		});
+		checkbox.addEventListener('change', () => {
+			if (this.isLocked()) {
+				checkbox.checked = this.diarize;
+				return;
+			}
+			this.diarize = checkbox.checked;
+		});
+	}
+
 	private renderTabBar(parent: HTMLElement): void {
 		const tabs = parent.createDiv({ cls: 'rewrite-tabs' });
 		const record = tabs.createEl('button', { text: 'Record', cls: 'rewrite-tab' });
@@ -339,6 +375,27 @@ export class ReWriteModal extends Modal {
 			return;
 		}
 
+		// Desktop-only opt-in (persisted on GlobalSettings.recordInBackground):
+		// pressing Record hands capture off to the Quick Record floating UI with
+		// this modal's template / destination override / context hint, closing the
+		// modal so Obsidian stays usable during capture. Hidden on mobile, where
+		// backgrounded capture is unreliable (the WebView suspends MediaRecorder).
+		if (Platform.isDesktop) {
+			const label = parent.createEl('label', { cls: 'rewrite-background-record' });
+			const checkbox = label.createEl('input', { type: 'checkbox' });
+			checkbox.checked = this.plugin.settings.recordInBackground;
+			checkbox.disabled = this.isLocked();
+			label.createSpan({
+				text: 'Record in background (close this window and keep recording in a floating bar)',
+			});
+			checkbox.addEventListener('change', () => {
+				this.plugin.settings.recordInBackground = checkbox.checked;
+				void this.plugin.saveSettings().catch((e) => {
+					console.error('ReWrite: failed to save record-in-background setting', e);
+				});
+			});
+		}
+
 		const button = parent.createEl('button', {
 			text: 'Record',
 			cls: 'mod-cta rewrite-record-button',
@@ -352,6 +409,12 @@ export class ReWriteModal extends Modal {
 			text: SILENCE_WARNING_TEXT,
 		});
 		warning.hide();
+		// Mobile-only: warn not to leave the app while recording. Shown for the whole capture
+		// (not tied to silence), hidden when idle.
+		const mobileWarning = Platform.isMobile
+			? parent.createDiv({ cls: 'rewrite-mobile-record-warning', text: MOBILE_RECORD_WARNING_TEXT })
+			: null;
+		mobileWarning?.hide();
 
 		// isRecording is hoisted onto the instance (this.isRecording) rather than kept as a tab-local
 		// closure variable so it survives a render() the instant one is disallowed to fire: tab bar,
@@ -363,6 +426,10 @@ export class ReWriteModal extends Modal {
 			// moment recording starts (isLocked() is true precisely because isRecording is true).
 			if (this.running) return;
 			if (!this.isRecording) {
+				if (Platform.isDesktop && this.plugin.settings.recordInBackground) {
+					this.startBackgroundHandoff();
+					return;
+				}
 				try {
 					await this.beginCapture();
 				} catch (e) {
@@ -372,6 +439,7 @@ export class ReWriteModal extends Modal {
 				this.isRecording = true;
 				button.setText('Stop');
 				dot.show();
+				mobileWarning?.show();
 				this.startTimerLoop(timer, warning);
 			} else {
 				button.disabled = true;
@@ -381,6 +449,7 @@ export class ReWriteModal extends Modal {
 					button.setText('Record');
 					dot.hide();
 					warning.hide();
+					mobileWarning?.hide();
 					this.stopTimerLoop();
 					this.startRecordingPipeline(source);
 				} catch (e) {
@@ -389,6 +458,7 @@ export class ReWriteModal extends Modal {
 					button.setText('Record');
 					dot.hide();
 					warning.hide();
+					mobileWarning?.hide();
 					this.stopTimerLoop();
 				} finally {
 					button.disabled = false;
@@ -484,6 +554,24 @@ export class ReWriteModal extends Modal {
 		this.recorder = null;
 	}
 
+	// "Record in background" path: capture the modal's per-invocation params into
+	// locals, close the modal, and hand capture off to the Quick Record floating UI
+	// via the plugin's single-owner entry (same activeQuickRecord slot as the two
+	// commands, so only one recording can ever be live).
+	private startBackgroundHandoff(): void {
+		const template = this.activeTemplate();
+		if (!template) {
+			new Notice('Please pick a template.');
+			return;
+		}
+		const destinationOverride = this.destinationOverride ?? undefined;
+		const contextHint = this.contextHint.trim() || undefined;
+		const diarize = this.diarize;
+		const plugin = this.plugin;
+		this.close();
+		void plugin.startBackgroundRecording({ template, destinationOverride, contextHint, diarize });
+	}
+
 	// Recorded-audio path: close the modal immediately and run the pipeline detached, reporting
 	// progress and errors through a Notice (mirrors runAudioFilePipeline). The recording is
 	// persisted to the vault before transcription, so the saved file is the recovery path on
@@ -513,6 +601,7 @@ export class ReWriteModal extends Modal {
 				source,
 				destinationOverride,
 				contextHint,
+				diarize: this.diarize,
 			},
 			{ startMessage: 'ReWrite: working...', templateId: template.id },
 		);
@@ -540,6 +629,7 @@ export class ReWriteModal extends Modal {
 				source,
 				destinationOverride: this.destinationOverride ?? undefined,
 				contextHint: this.contextHint.trim() || undefined,
+				diarize: this.diarize,
 				onStage: (stage) => progress.setText(stageLabel(stage)),
 			});
 			this.plugin.settings.lastUsedTemplateId = template.id;

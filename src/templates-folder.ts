@@ -46,7 +46,16 @@ export interface PopulateResult {
 	folder: string;
 }
 
-export async function populateDefaultTemplates(app: App, folderPath: string): Promise<PopulateResult> {
+// `disabledIds` (GlobalSettings.disabledDefaultTemplateIds) suppresses defaults
+// the user disabled: they are neither created here nor counted as skipped-by-
+// collision. Files Populate creates are stamped `managed: true` so Update can
+// tell plugin-managed files from a user's own template that happens to share a
+// name (or id) with a built-in.
+export async function populateDefaultTemplates(
+	app: App,
+	folderPath: string,
+	disabledIds: ReadonlySet<string> = new Set(),
+): Promise<PopulateResult> {
 	const normalized = normalizeFolderPath(folderPath);
 	if (!normalized) throw new Error('Templates folder path is empty.');
 
@@ -56,6 +65,7 @@ export async function populateDefaultTemplates(app: App, folderPath: string): Pr
 	let created = 0;
 	let skipped = 0;
 	for (const template of freshDefaultTemplates()) {
+		if (disabledIds.has(template.id)) continue;
 		if (existingIds.has(template.id)) {
 			skipped++;
 			continue;
@@ -66,10 +76,43 @@ export async function populateDefaultTemplates(app: App, folderPath: string): Pr
 			skipped++;
 			continue;
 		}
-		await app.vault.create(path, renderTemplateFile(template));
+		await app.vault.create(path, renderTemplateFile({ ...template, managed: true }));
 		created++;
 	}
 	return { created, skipped, folder: normalized };
+}
+
+// Locate the on-disk template file whose frontmatter id matches. Used by the
+// per-default manage UI (disable = delete the file; untrack = flip its managed
+// flag) so identity stays id-based and rename-proof.
+export async function findTemplateFileById(app: App, folderPath: string, id: string): Promise<TFile | null> {
+	const normalized = normalizeFolderPath(folderPath);
+	if (!normalized) return null;
+	const folder = app.vault.getAbstractFileByPath(normalized);
+	if (!(folder instanceof TFolder)) return null;
+	for (const child of folder.children) {
+		if (!(child instanceof TFile) || child.extension !== 'md') continue;
+		if ((await readTemplateId(app, child)) === id) return child;
+	}
+	return null;
+}
+
+// Recreate a single built-in default (used when re-enabling a disabled one).
+// Returns the created path, or null when the default is unknown, its id is
+// already on disk, or the target filename collides.
+export async function restoreDefaultTemplate(app: App, folderPath: string, id: string): Promise<string | null> {
+	const normalized = normalizeFolderPath(folderPath);
+	if (!normalized) throw new Error('Templates folder path is empty.');
+	const def = freshDefaultTemplates().find((t) => t.id === id);
+	if (!def) return null;
+	const folder = await ensureFolder(app, normalized);
+	const existingIds = await collectExistingIds(app, folder);
+	if (existingIds.has(id)) return null;
+	const filename = `${sanitizeFilename(def.name)}.md`;
+	const path = normalizePath(`${normalized}/${filename}`);
+	if (app.vault.getAbstractFileByPath(path)) return null;
+	await app.vault.create(path, renderTemplateFile({ ...def, managed: true }));
+	return path;
 }
 
 // One thing the Update button could not safely auto-merge, surfaced in the report.
@@ -104,6 +147,9 @@ export interface UpdateResult {
 	unchanged: number;
 	conflicts: number;
 	parseFailed: number;
+	// Default-derived files with `managed: false`: the user froze them, so the
+	// walk leaves them untouched (not even reported as conflicts).
+	untracked: number;
 	entries: TemplateUpdateEntry[];
 	reportPath: string | null;
 }
@@ -207,6 +253,10 @@ export function mergeTemplate(onDisk: NoteTemplate, def: NoteTemplate, priors: N
 		diarize,
 		titleFromContent,
 		noteProperties: mergedProps,
+		// mergeTemplate only runs on tracked default-derived files (Update skips
+		// `managed: false` before merging), so the reconciled file is stamped as
+		// plugin-managed — this also back-fills the flag onto pre-flag files.
+		managed: true,
 	};
 	return { merged, conflicts, changes };
 }
@@ -215,7 +265,11 @@ export function mergeTemplate(onDisk: NoteTemplate, def: NoteTemplate, priors: N
 // with the current built-in defaults: fill in new fields and missing properties,
 // recreate any defaults deleted entirely, and never overwrite user edits. Anything
 // that cannot be safely auto-merged is written to a human-facing report file.
-export async function updateDefaultTemplates(app: App, folderPath: string): Promise<UpdateResult> {
+export async function updateDefaultTemplates(
+	app: App,
+	folderPath: string,
+	disabledIds: ReadonlySet<string> = new Set(),
+): Promise<UpdateResult> {
 	const normalized = normalizeFolderPath(folderPath);
 	if (!normalized) throw new Error('Templates folder path is empty.');
 
@@ -229,6 +283,7 @@ export async function updateDefaultTemplates(app: App, folderPath: string): Prom
 	let unchanged = 0;
 	let conflicts = 0;
 	let parseFailed = 0;
+	let untracked = 0;
 
 	for (const child of folder.children) {
 		if (!(child instanceof TFile)) continue;
@@ -240,6 +295,9 @@ export async function updateDefaultTemplates(app: App, folderPath: string): Prom
 		if (!id) continue;
 		const def = defaultsById.get(id);
 		if (!def) continue; // user's own template (id not in the default set)
+		// A disabled default that somehow still has a file on disk is the user's
+		// business now; don't reconcile or count it.
+		if (disabledIds.has(id)) continue;
 		seenIds.add(id);
 
 		let onDisk: NoteTemplate | null = null;
@@ -254,6 +312,14 @@ export async function updateDefaultTemplates(app: App, folderPath: string): Prom
 				id, name: def.name, path: child.path, status: 'parseFailed',
 				changes: [], conflicts: [{ kind: 'parseFailed' }],
 			});
+			continue;
+		}
+
+		// Untracked (`managed: false`): the user adopted this default as their own;
+		// Update must never touch it again. An absent flag on a default-derived
+		// file (created before the flag existed) still counts as tracked.
+		if (onDisk.managed === false) {
+			untracked++;
 			continue;
 		}
 
@@ -278,19 +344,21 @@ export async function updateDefaultTemplates(app: App, folderPath: string): Prom
 	}
 
 	// Restore defaults missing from disk entirely (superset top-up), reusing the
-	// same name + path-collision skip as Populate.
+	// same name + path-collision skip as Populate. Disabled ids are never
+	// resurrected; that is the whole point of the disable switch.
 	for (const def of defaultsById.values()) {
 		if (seenIds.has(def.id)) continue;
+		if (disabledIds.has(def.id)) continue;
 		const filename = `${sanitizeFilename(def.name)}.md`;
 		const path = normalizePath(`${normalized}/${filename}`);
 		if (app.vault.getAbstractFileByPath(path)) continue;
-		await app.vault.create(path, renderTemplateFile(def));
+		await app.vault.create(path, renderTemplateFile({ ...def, managed: true }));
 		created++;
 		entries.push({ id: def.id, name: def.name, path, status: 'created', changes: [], conflicts: [] });
 	}
 
 	const result: UpdateResult = {
-		folder: normalized, created, updated, unchanged, conflicts, parseFailed, entries, reportPath: null,
+		folder: normalized, created, updated, unchanged, conflicts, parseFailed, untracked, entries, reportPath: null,
 	};
 	if (entries.some((e) => e.status !== 'unchanged')) {
 		result.reportPath = await writeTemplateUpdateReport(app, normalized, result);
@@ -402,6 +470,13 @@ export function parseTemplateContent(file: TFile, content: string): NoteTemplate
 	const titleFromContent = rawTitleFromContent === true
 		|| (typeof rawTitleFromContent === 'string' && rawTitleFromContent.trim().toLowerCase() === 'true');
 
+	// `managed` is TRI-state, unlike the other flags: explicit true (plugin-managed),
+	// explicit false (untracked; Update must never touch the file), or undefined
+	// (key absent/empty, e.g. pre-flag files — treated as managed when the id
+	// matches a built-in, preserving old behavior). Same boolean-or-string
+	// tolerance for edits via Obsidian's Properties UI.
+	const managed = parseTriStateFlag(obj.managed);
+
 	// Authored as a YAML map (key = property name, value = instruction). Parsed
 	// into an ordered array (object key order is preserved). Non-map values and
 	// blank keys are skipped; a missing/non-string instruction becomes "".
@@ -430,7 +505,19 @@ export function parseTemplateContent(file: TFile, content: string): NoteTemplate
 		diarize,
 		titleFromContent,
 		noteProperties,
+		managed,
 	};
+}
+
+function parseTriStateFlag(raw: unknown): boolean | undefined {
+	if (raw === true) return true;
+	if (raw === false) return false;
+	if (typeof raw === 'string') {
+		const v = raw.trim().toLowerCase();
+		if (v === 'true') return true;
+		if (v === 'false') return false;
+	}
+	return undefined;
 }
 
 async function collectExistingIds(app: App, folder: TFolder): Promise<Set<string>> {
@@ -519,6 +606,13 @@ export function renderTemplateFile(template: NoteTemplate): string {
 	const titleLine = template.titleFromContent
 		? 'titleFromContent: true'
 		: 'titleFromContent:';
+	// managed is tri-state: explicit true/false round-trip, undefined renders as
+	// the discoverable empty stub (absent semantics).
+	const managedLine = template.managed === true
+		? 'managed: true'
+		: template.managed === false
+			? 'managed: false'
+			: 'managed:';
 	// noteProperties is a nested map, so unlike the booleans it is emitted only
 	// when the template actually declares properties (no always-empty stub).
 	const propsBlock = template.noteProperties && template.noteProperties.length > 0
@@ -528,7 +622,7 @@ export function renderTemplateFile(template: NoteTemplate): string {
 			),
 		}).replace(/\n+$/, '')
 		: '';
-	return `---\n${fm}\n${disableLine}\n${contextLine}\n${diarizeLine}\n${titleLine}${propsBlock}\n---\n${template.prompt}\n`;
+	return `---\n${fm}\n${disableLine}\n${contextLine}\n${diarizeLine}\n${titleLine}\n${managedLine}${propsBlock}\n---\n${template.prompt}\n`;
 }
 
 // Guards against names that are unsafe/unusable as a file basename: purely dots (would

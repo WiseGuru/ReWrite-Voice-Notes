@@ -6,6 +6,8 @@ Obsidian on iOS and Android runs in a constrained WebView, so a few things behav
 
 Mobile WebViews suspend (and stop `MediaRecorder` capture) when the screen sleeps. To counter this, the plugin holds a screen wake lock for the duration of an active recording on both iOS and Android, so screen-off mid-recording is largely mitigated on supported OS versions. It is best-effort: on older WebViews, in an insecure context, or if the OS denies the request, it silently falls back, so keeping the screen on (or using the Paste tab with an OS-level dictation keyboard) is still the safe habit. The trade-off is that the screen stays lit while recording.
 
+The wake lock only prevents the screen from sleeping; it cannot keep the recording alive if you **switch to another app**, which backgrounds and suspends Obsidian. Both recording UIs (the modal Record tab and the Quick Record floating bar) show a yellow caution while recording reminding you to keep Obsidian in the foreground. If you leave, the capture stops and the in-progress recording may be lost.
+
 ## Encryption on mobile
 
 If your Obsidian version provides secret storage on mobile, keys use it just like on desktop. Otherwise the plugin prompts you to set a passphrase before any key can be saved, and keys are then encrypted with Argon2id/PBKDF2 AES-GCM. The `secrets.json.nosync` file (which holds encrypted keys only in passphrase mode) uses the `.nosync` suffix so iCloud Drive skips it; for other sync tools, see [Secrets and sync](Secrets-and-Sync).

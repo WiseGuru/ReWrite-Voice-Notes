@@ -12,10 +12,18 @@ import {
 	TranscriptionProviderID,
 } from '../types';
 import { detectActiveProfileKind } from '../platform';
-import { createTranscriptionProvider, transcriptionProviderSupportsDiarization } from '../transcription';
+import { createTranscriptionProvider } from '../transcription';
+import { transcriptionProviderSupportsRealtime } from '../realtime';
 import { createLLMProvider } from '../llm';
 import { formatWhisperStatus } from '../whisper-host';
-import { loadPriorTemplateVersions, populateDefaultTemplates, updateDefaultTemplates } from '../templates-folder';
+import {
+	findTemplateFileById,
+	loadPriorTemplateVersions,
+	populateDefaultTemplates,
+	restoreDefaultTemplate,
+	updateDefaultTemplates,
+} from '../templates-folder';
+import { freshDefaultTemplates } from './default-templates';
 import { populateDefaultSharedCore } from '../shared-core';
 import { populateDefaultAssistantPrompt } from '../assistant-prompt';
 import { populateDefaultKnownNouns } from '../known-nouns';
@@ -34,6 +42,7 @@ import {
 import { hydrateSecrets } from '.';
 import { PassphraseModal } from '../ui/passphrase-modal';
 import { ConfirmModal } from '../ui/confirm-modal';
+import { IngestRuleModal } from '../ui/ingest-rule-modal';
 
 // Sentinel value for the "Custom..." entry in a model dropdown; never written to config.model.
 const CUSTOM_MODEL_OPTION = '__rewrite_custom__';
@@ -150,6 +159,10 @@ export class ReWriteSettingTab extends PluginSettingTab {
 	// while its async re-encryption + re-render is still in flight.
 	private modeChangeInFlight = false;
 
+	// Expand state of the "Manage built-in templates" disclosure, surviving the
+	// full-container redraws its own toggles trigger (mirrors inactiveProfileExpanded).
+	private manageDefaultsExpanded = false;
+
 	constructor(app: App, private readonly plugin: ReWritePlugin) {
 		super(app, plugin);
 	}
@@ -174,6 +187,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 		this.renderTemplates(containerEl);
 		this.renderSharedCore(containerEl);
 		this.renderRecording(containerEl);
+		this.renderAutoIngest(containerEl);
 		this.renderAdHocInstructions(containerEl);
 		this.renderKnownNouns(containerEl);
 	}
@@ -592,6 +606,11 @@ export class ReWriteSettingTab extends PluginSettingTab {
 				});
 			});
 
+		// The three provider subsections (batch transcription, real-time, LLM) each carry a
+		// heading and share one field order: provider, base URL (where applicable), API key,
+		// then model. Keeping the arrangement identical lets the profile scan predictably.
+		new Setting(body).setName('Transcription').setHeading();
+
 		new Setting(body)
 			.setName('Transcription provider')
 			.addDropdown((dd) => {
@@ -608,8 +627,6 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			});
 
 		if (profile.transcriptionProvider !== 'none') {
-			this.renderTranscriptionModelField(body, profile);
-
 			if (profile.transcriptionProvider === 'openai-compatible') {
 				new Setting(body)
 					.setName('Transcription base URL')
@@ -639,19 +656,15 @@ export class ReWriteSettingTab extends PluginSettingTab {
 					});
 			}
 
-			if (transcriptionProviderSupportsDiarization(profile.transcriptionProvider)) {
-				new Setting(body)
-					.setName('Identify speakers')
-					.setDesc('Tag each voice in the transcript with a speaker label and keep those labels through cleanup. Optional, and only this provider supports it. Quality varies: the speaker count is a guess and labels can drift mid-conversation.')
-					.addToggle((t) => {
-						t.setValue(profile.transcriptionConfig.diarize ?? false);
-						t.onChange(async (v) => {
-							profile.transcriptionConfig.diarize = v;
-							await this.commit();
-						});
-					});
-			}
+			this.renderTranscriptionModelField(body, profile);
 		}
+
+		// Real-time (streaming) transcription is configured entirely on its own: its own
+		// provider, key, and model, independent of the batch transcription provider above.
+		// So a profile can use one service for batch and a different one for live dictation.
+		this.renderRealtimeSection(body, profile);
+
+		new Setting(body).setName('Post-processing (LLM)').setHeading();
 
 		new Setting(body)
 			.setName('LLM provider')
@@ -666,8 +679,6 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			});
 
 		if (profile.llmProvider !== 'none') {
-			this.renderLLMModelField(body, profile);
-
 			if (profile.llmProvider === 'openai-compatible') {
 				new Setting(body)
 					.setName('LLM base URL')
@@ -694,6 +705,8 @@ export class ReWriteSettingTab extends PluginSettingTab {
 						await this.commit();
 					});
 				});
+
+			this.renderLLMModelField(body, profile);
 
 			this.renderNoteLength(body, profile);
 		}
@@ -734,6 +747,55 @@ export class ReWriteSettingTab extends PluginSettingTab {
 				});
 			});
 		setting.settingEl.addClass('rewrite-note-length');
+	}
+
+	// Real-time (streaming) transcription, configured independently of batch transcription:
+	// its own provider dropdown (None + realtime-capable providers only), key, and model.
+	private renderRealtimeSection(parent: HTMLElement, profile: EnvironmentProfile): void {
+		new Setting(parent).setName('Real-time transcription').setHeading();
+		new Setting(parent)
+			.setName('Real-time provider')
+			.setDesc('Provider for live dictation, independent of the batch transcription provider above. Only providers with a streaming endpoint are listed.')
+			.addDropdown((dd) => {
+				for (const opt of TRANSCRIPTION_OPTIONS) {
+					if (opt.desktopOnly && !Platform.isDesktop) continue;
+					// 'none' (off) plus only the realtime-capable providers.
+					if (opt.id !== 'none' && !transcriptionProviderSupportsRealtime(opt.id)) continue;
+					dd.addOption(opt.id, opt.label);
+				}
+				dd.setValue(transcriptionProviderSupportsRealtime(profile.realtimeProvider) ? profile.realtimeProvider : 'none');
+				dd.onChange(async (v) => {
+					profile.realtimeProvider = v as TranscriptionProviderID;
+					await this.commit();
+					this.display();
+				});
+			});
+
+		if (!transcriptionProviderSupportsRealtime(profile.realtimeProvider)) return;
+
+		new Setting(parent)
+			.setName('Real-time API key')
+			.setDesc('Key for the real-time provider. Stored encrypted.')
+			.addText((t) => {
+				t.inputEl.type = 'password';
+				this.applyApiKeyFieldState(t.inputEl);
+				t.setPlaceholder(this.apiKeyPlaceholder());
+				t.setValue(profile.realtimeConfig.apiKey);
+				t.onChange(async (v) => {
+					if (this.plugin.encryptionStatus.locked) return;
+					profile.realtimeConfig.apiKey = v;
+					await this.commit();
+				});
+			});
+		// Adaptive model control (dropdown + Refresh where the provider lists models, else a
+		// text field), sharing populateModelField with the batch fields. The streaming model
+		// is often different from the batch model, so it has its own value in realtimeConfig.
+		parent.createEl('p', {
+			text: 'The streaming model, often different from the batch model. Leave blank for the provider default.',
+			cls: 'rewrite-section-desc',
+		});
+		const modelWrapper = parent.createDiv({ cls: 'rewrite-model-field' });
+		this.populateModelField(modelWrapper, profile, 'realtime');
 	}
 
 	private renderProfileAdvanced(parent: HTMLElement, profile: EnvironmentProfile): void {
@@ -794,22 +856,31 @@ export class ReWriteSettingTab extends PluginSettingTab {
 	private populateModelField(
 		wrapper: HTMLElement,
 		profile: EnvironmentProfile,
-		side: 'transcription' | 'llm',
+		side: 'transcription' | 'llm' | 'realtime',
 		forceText = false,
 	): void {
 		wrapper.empty();
 
-		const isTranscription = side === 'transcription';
-		const provider = isTranscription
-			? createTranscriptionProvider(profile.transcriptionProvider)
-			: createLLMProvider(profile.llmProvider);
-		const config = isTranscription ? profile.transcriptionConfig : profile.llmConfig;
-		const cached = (isTranscription
-			? this.plugin.settings.modelCache.transcription[profile.transcriptionProvider]
-			: this.plugin.settings.modelCache.llm[profile.llmProvider])?.ids ?? [];
-		const hint = isTranscription
-			? transcriptionModelHint(profile.transcriptionProvider)
-			: llmModelHint(profile.llmProvider);
+		// 'transcription' and 'realtime' are both backed by a transcription provider; they
+		// differ only in which provider id / config slot / model cache they read (realtime
+		// shares the transcription cache since it is the same provider's catalogue). 'llm'
+		// uses the LLM provider + cache.
+		const isLLM = side === 'llm';
+		const transcriptionId = side === 'realtime' ? profile.realtimeProvider : profile.transcriptionProvider;
+		const provider = isLLM
+			? createLLMProvider(profile.llmProvider)
+			: createTranscriptionProvider(transcriptionId);
+		const config: TranscriptionConfig | LLMConfig = side === 'transcription'
+			? profile.transcriptionConfig
+			: side === 'realtime'
+				? profile.realtimeConfig
+				: profile.llmConfig;
+		const cached = (isLLM
+			? this.plugin.settings.modelCache.llm[profile.llmProvider]
+			: this.plugin.settings.modelCache.transcription[transcriptionId])?.ids ?? [];
+		const hint = isLLM
+			? llmModelHint(profile.llmProvider)
+			: transcriptionModelHint(transcriptionId);
 		const current = config.model;
 		const supportsList = typeof provider.listModels === 'function';
 		const showDropdown = supportsList && cached.length > 0 && !forceText;
@@ -822,19 +893,21 @@ export class ReWriteSettingTab extends PluginSettingTab {
 					? 'empty-cache'
 					: 'dropdown';
 
-		const docsUrl = isTranscription
-			? transcriptionModelDocsUrl(profile.transcriptionProvider)
-			: null;
+		const docsUrl = isLLM ? null : transcriptionModelDocsUrl(transcriptionId);
 
-		const setting = new Setting(wrapper)
-			.setName(isTranscription ? 'Transcription model' : 'LLM model');
+		const label = side === 'transcription'
+			? 'Transcription model'
+			: side === 'realtime'
+				? 'Real-time model'
+				: 'LLM model';
+		const setting = new Setting(wrapper).setName(label);
 		applyModelFieldDesc(setting, hint, mode, docsUrl);
 
 		const refresh = async (): Promise<void> => {
-			if (isTranscription) {
-				await this.refreshTranscriptionModels(profile.transcriptionProvider, profile.transcriptionConfig);
-			} else {
+			if (isLLM) {
 				await this.refreshLLMModels(profile.llmProvider, profile.llmConfig);
+			} else {
+				await this.refreshTranscriptionModels(transcriptionId, config as TranscriptionConfig);
 			}
 			this.populateModelField(wrapper, profile, side, false);
 		};
@@ -989,6 +1062,31 @@ export class ReWriteSettingTab extends PluginSettingTab {
 				});
 			});
 
+		new Setting(parent)
+			.setName('Start automatically')
+			.setDesc('Start the server when Obsidian opens, if this device\'s profile uses local whisper.cpp. An already-running server from a previous session is adopted instead of doubled up.')
+			.addToggle((t) => {
+				t.setValue(cfg.autoStart);
+				t.onChange(async (v) => {
+					cfg.autoStart = v;
+					await this.commit();
+				});
+			});
+
+		new Setting(parent)
+			.setName('Stop when idle')
+			.setDesc('Minutes without a transcription before the server is stopped, freeing the model\'s memory. 0 keeps it running. Only servers started or adopted by ReWrite are stopped, and never mid-transcription.')
+			.addText((t) => {
+				t.inputEl.type = 'number';
+				t.setValue(String(cfg.idleStopMinutes));
+				t.setPlaceholder('0');
+				t.onChange(async (v) => {
+					const n = Number.parseInt(v, 10);
+					cfg.idleStopMinutes = Number.isFinite(n) && n > 0 ? n : 0;
+					await this.commit();
+				});
+			});
+
 		const host = this.plugin.whisperHost;
 		const snap = host.snapshot();
 
@@ -1067,7 +1165,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			.addButton((b) => {
 				b.setButtonText('Populate').setCta().onClick(() => void this.runGuardedButton(b, async () => {
 					try {
-						const result = await populateDefaultTemplates(this.app, s.templatesFolderPath);
+						const result = await populateDefaultTemplates(this.app, s.templatesFolderPath, new Set(s.disabledDefaultTemplateIds));
 						await this.plugin.refreshTemplates();
 						// The shared core is load-bearing for the default templates' quality
 						// (it carries the guardrail + output discipline), so seed it alongside.
@@ -1085,7 +1183,7 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			.addButton((b) => {
 				b.setButtonText('Update').onClick(() => void this.runGuardedButton(b, async () => {
 					try {
-						const result = await updateDefaultTemplates(this.app, s.templatesFolderPath);
+						const result = await updateDefaultTemplates(this.app, s.templatesFolderPath, new Set(s.disabledDefaultTemplateIds));
 						await this.plugin.refreshTemplates();
 						const reviewNote = result.conflicts > 0
 							? ` ${result.conflicts} need review.`
@@ -1093,8 +1191,11 @@ export class ReWriteSettingTab extends PluginSettingTab {
 						const failNote = result.parseFailed > 0
 							? ` ${result.parseFailed} unparseable, skipped.`
 							: '';
+						const untrackedNote = result.untracked > 0
+							? ` ${result.untracked} untracked, left alone.`
+							: '';
 						const reportNote = result.reportPath ? ` See ${result.reportPath}.` : '';
-						new Notice(`ReWrite: updated templates in ${result.folder}. ${result.updated} updated, ${result.created} created, ${result.unchanged} unchanged.${reviewNote}${failNote}${reportNote}`);
+						new Notice(`ReWrite: updated templates in ${result.folder}. ${result.updated} updated, ${result.created} created, ${result.unchanged} unchanged.${reviewNote}${failNote}${untrackedNote}${reportNote}`);
 						this.display();
 					} catch (e) {
 						console.error('ReWrite: update templates failed', e);
@@ -1119,6 +1220,8 @@ export class ReWriteSettingTab extends PluginSettingTab {
 					}
 				}));
 			});
+
+		this.renderManageDefaults(parent);
 
 		const loaded = this.plugin.templates;
 		const listDesc = loaded.length === 0
@@ -1183,6 +1286,142 @@ export class ReWriteSettingTab extends PluginSettingTab {
 			});
 	}
 
+	// Per-default checklist. Each row has two clearly-labelled, visually-distinct
+	// controls: an "Enabled" switch (off = delete the file and add the id to
+	// disabledDefaultTemplateIds so Populate/Update never re-add it) and a "Tracked"
+	// checkbox (off = write `managed: false` so Update leaves the file alone). The
+	// switch-vs-checkbox split, plus inline labels, makes which control does what
+	// legible without hovering. Driven off freshDefaultTemplates() so the list stays
+	// in sync as defaults come and go; on-disk state comes from the loaded cache.
+	private renderManageDefaults(parent: HTMLElement): void {
+		const s = this.plugin.settings;
+		const details = parent.createEl('details', { cls: 'rewrite-manage-defaults' });
+		details.open = this.manageDefaultsExpanded;
+		details.addEventListener('toggle', () => {
+			this.manageDefaultsExpanded = details.open;
+		});
+		details.createEl('summary', { text: 'Manage built-in templates' });
+		const intro = details.createEl('p', { cls: 'rewrite-section-desc' });
+		intro.createSpan({ cls: 'rewrite-manage-legend-term', text: 'Enabled' });
+		intro.appendText(' keeps the template in your folder; turning it off deletes the file and stops the populate and update buttons from bringing it back. ');
+		intro.createSpan({ cls: 'rewrite-manage-legend-term', text: 'Tracked' });
+		intro.appendText(' lets the update button keep the template current; unchecking it freezes your copy so updates never change it again.');
+
+		const disabled = new Set(s.disabledDefaultTemplateIds);
+		for (const def of freshDefaultTemplates()) {
+			const isDisabled = disabled.has(def.id);
+			const onDisk = this.plugin.templates.find((t) => t.id === def.id);
+			const tracked = onDisk ? onDisk.managed !== false : true;
+			const state = isDisabled
+				? 'Off. The file was removed; Populate and Update skip it.'
+				: !onDisk
+					? 'Not in your folder yet. Populate or Update will add it.'
+					: tracked
+						? 'In your folder. Update keeps it current.'
+						: 'In your folder, frozen. Update leaves it alone.';
+
+			const row = new Setting(details).setName(def.name).setDesc(state);
+			row.settingEl.addClass('rewrite-manage-row');
+
+			// Tracked control first, so the row reads [Tracked ☑] [Enabled ⊙] left to
+			// right. The "Tracked" caption precedes the checkbox inside the label. Only
+			// meaningful for an enabled, on-disk template.
+			if (!isDisabled && onDisk) {
+				const trackField = row.controlEl.createEl('label', { cls: 'rewrite-manage-check' });
+				// Caption reflects the current state (the tab re-renders on toggle), matching
+				// the Enabled/Disabled switch caption beside it.
+				trackField.createSpan({ text: tracked ? 'Tracked' : 'Untracked' });
+				const cb = trackField.createEl('input', { type: 'checkbox' });
+				cb.checked = tracked;
+				cb.setAttribute('aria-label', 'Tracked: keep this template current on update');
+				cb.addEventListener('change', () => {
+					void this.setDefaultTemplateTracked(def.id, cb.checked);
+				});
+			}
+
+			// Enabled/Disabled caption + the switch, added last so the switch sits at the far
+			// right. The caption reflects the current state (the whole tab re-renders on toggle).
+			row.controlEl.createSpan({
+				cls: 'rewrite-manage-switch-label',
+				text: isDisabled ? 'Disabled' : 'Enabled',
+			});
+			row.addToggle((t) => {
+				t.setValue(!isDisabled);
+				t.setTooltip(isDisabled ? 'Turn on to re-create the file' : 'Turn off to remove the file');
+				t.onChange((v) => {
+					if (!v) {
+						new ConfirmModal({
+							app: this.app,
+							title: 'Disable built-in template',
+							body: `This removes "${def.name}" from your templates folder and stops Populate and Update from re-adding it, including after plugin updates. Any edits you made to the file are lost. You can turn it back on later to get a fresh copy.`,
+							confirmLabel: 'Disable and remove',
+							confirmCls: 'mod-warning',
+							onConfirm: async () => {
+								await this.disableDefaultTemplate(def.id);
+							},
+							onCancel: () => this.display(),
+						}).open();
+						return;
+					}
+					void this.enableDefaultTemplate(def.id);
+				});
+			});
+		}
+	}
+
+	private async disableDefaultTemplate(id: string): Promise<void> {
+		const s = this.plugin.settings;
+		if (!s.disabledDefaultTemplateIds.includes(id)) {
+			s.disabledDefaultTemplateIds.push(id);
+		}
+		await this.commit();
+		try {
+			const file = await findTemplateFileById(this.app, s.templatesFolderPath, id);
+			if (file) await this.app.fileManager.trashFile(file);
+		} catch (e) {
+			console.error('ReWrite: could not remove disabled template file', e);
+			new Notice(`ReWrite: template disabled, but its file could not be removed. ${e instanceof Error ? e.message : String(e)}`);
+		}
+		await this.plugin.refreshTemplates();
+		this.display();
+	}
+
+	private async enableDefaultTemplate(id: string): Promise<void> {
+		const s = this.plugin.settings;
+		s.disabledDefaultTemplateIds = s.disabledDefaultTemplateIds.filter((v) => v !== id);
+		await this.commit();
+		try {
+			await restoreDefaultTemplate(this.app, s.templatesFolderPath, id);
+		} catch (e) {
+			console.error('ReWrite: could not re-create enabled template', e);
+			new Notice(`ReWrite: template enabled, but its file could not be re-created. ${e instanceof Error ? e.message : String(e)}`);
+		}
+		await this.plugin.refreshTemplates();
+		this.display();
+	}
+
+	private async setDefaultTemplateTracked(id: string, tracked: boolean): Promise<void> {
+		const s = this.plugin.settings;
+		try {
+			const file = await findTemplateFileById(this.app, s.templatesFolderPath, id);
+			if (!file) {
+				new Notice('ReWrite: template file not found.');
+				this.display();
+				return;
+			}
+			// Edit just the frontmatter key in place (preserves the body and any
+			// user formatting) rather than re-rendering the whole file.
+			await this.app.fileManager.processFrontMatter(file, (fm) => {
+				Object.assign(fm, { managed: tracked });
+			});
+		} catch (e) {
+			console.error('ReWrite: could not update managed flag', e);
+			new Notice(`ReWrite: could not update the template. ${e instanceof Error ? e.message : String(e)}`);
+		}
+		await this.plugin.refreshTemplates();
+		this.display();
+	}
+
 	private renderRecording(parent: HTMLElement): void {
 		this.sectionHeading(parent, 'Recording', 'mic');
 		new Setting(parent)
@@ -1206,6 +1445,74 @@ export class ReWriteSettingTab extends PluginSettingTab {
 				t.onChange(async (v) => {
 					this.plugin.settings.attachmentsFolderPath = v;
 					await this.commit();
+				});
+			});
+	}
+
+	private renderAutoIngest(parent: HTMLElement): void {
+		this.sectionHeading(parent, 'Auto-ingest folders', 'folder-input');
+		parent.createEl('p', {
+			text: 'Drop audio files from outside Obsidian into a vault folder, then run the process auto-ingest folders command from the command palette. Each file becomes a note using the folder\'s template, and the recording is moved in with your other saved recordings. Files that fail stay in the folder and are retried the next time you run the command.',
+			cls: 'rewrite-section-desc',
+		});
+
+		const s = this.plugin.settings;
+		s.ingestRules.forEach((rule, index) => {
+			const template = this.plugin.templates.find((t) => t.id === rule.templateId);
+			const problem = !template
+				? ' Warning: template is missing; this rule will be skipped.'
+				: template.insertMode !== 'newFile'
+					? ' Warning: template does not create a new file; this rule will be skipped.'
+					: '';
+			new Setting(parent)
+				.setName(rule.folderPath)
+				.setDesc(`Template: ${template?.name ?? rule.templateId}.${problem}`)
+				.addToggle((t) => {
+					t.setValue(rule.enabled);
+					t.setTooltip('Enabled');
+					t.onChange(async (v) => {
+						rule.enabled = v;
+						await this.commit();
+					});
+				})
+				.addButton((b) => {
+					b.setButtonText('Edit').onClick(() => {
+						new IngestRuleModal({
+							app: this.app,
+							templates: this.plugin.templates,
+							rule,
+							onSubmit: async (updated) => {
+								s.ingestRules[index] = updated;
+								await this.commit();
+								this.display();
+							},
+						}).open();
+					});
+				})
+				.addExtraButton((b) => {
+					b.setIcon('trash-2').setTooltip('Delete rule').onClick(() => {
+						void (async () => {
+							s.ingestRules.splice(index, 1);
+							await this.commit();
+							this.display();
+						})();
+					});
+				});
+		});
+
+		new Setting(parent)
+			.setName(s.ingestRules.length === 0 ? 'No ingest folders yet' : 'Add another folder')
+			.addButton((b) => {
+				b.setButtonText('Add ingest folder').setCta().onClick(() => {
+					new IngestRuleModal({
+						app: this.app,
+						templates: this.plugin.templates,
+						onSubmit: async (rule) => {
+							s.ingestRules.push(rule);
+							await this.commit();
+							this.display();
+						},
+					}).open();
 				});
 			});
 	}

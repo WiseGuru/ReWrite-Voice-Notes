@@ -40,6 +40,8 @@ In ReWrite settings, scroll to **Local whisper.cpp server (desktop)** and fill i
 
 Click **Start**. The status indicator moves Stopped, Starting, Running. **View log** shows whisper-server's output if startup fails. You can also start/stop from the command palette and the desktop status-bar item.
 
+Two optional lifecycle settings automate this: **Start automatically** launches the server when Obsidian opens (when this device's profile uses local whisper.cpp; a server left running from a previous session is adopted, not doubled up), and **Stop when idle** shuts it down after the configured minutes without a transcription, freeing the model's memory. Idle stop never touches a server ReWrite did not start and never interrupts a transcription in progress.
+
 ### 5. Use it from a profile
 
 Set the profile's **Transcription provider** to "Local whisper.cpp (desktop only)". The Transcription model field is decorative for this provider; whisper-server uses whichever model file is loaded at startup. No API key is needed. The plugin transcodes recordings to 16 kHz mono WAV before sending them to `/inference`.

@@ -64,4 +64,65 @@ describe('mergeSettings', () => {
 		expect(merged.desktopProfile.transcriptionConfig.model).toBe('whisper-1');
 		expect(merged.desktopProfile.transcriptionConfig.baseUrl).toBe(DEFAULT_SETTINGS.desktopProfile.transcriptionConfig.baseUrl);
 	});
+
+	it('provides and merges the separate realtime provider + config slot', () => {
+		const base = mergeSettings(DEFAULT_SETTINGS, {});
+		expect(base.desktopProfile.realtimeProvider).toBe('none');
+		expect(base.desktopProfile.realtimeConfig).toEqual(DEFAULT_SETTINGS.desktopProfile.realtimeConfig);
+		// realtimeProvider is enum-validated: garbage falls back to the base value
+		const bad = mergeSettings(DEFAULT_SETTINGS, {
+			// @ts-expect-error deliberately invalid
+			desktopProfile: { ...DEFAULT_SETTINGS.desktopProfile, realtimeProvider: 'not-a-provider' },
+		});
+		expect(bad.desktopProfile.realtimeProvider).toBe('none');
+		// a stored partial (e.g. an older data.json with no realtimeConfig) still yields the slot
+		const merged = mergeSettings(DEFAULT_SETTINGS, {
+			desktopProfile: {
+				...DEFAULT_SETTINGS.desktopProfile,
+				realtimeConfig: { ...DEFAULT_SETTINGS.desktopProfile.realtimeConfig, model: 'voxtral-mini-transcribe-realtime-2602' },
+			},
+		});
+		expect(merged.desktopProfile.realtimeConfig.model).toBe('voxtral-mini-transcribe-realtime-2602');
+	});
+
+	it('keeps valid disabledDefaultTemplateIds and drops malformed entries', () => {
+		const merged = mergeSettings(DEFAULT_SETTINGS, {
+			// @ts-expect-error deliberately mixed garbage to simulate a corrupt data.json
+			disabledDefaultTemplateIds: ['tpl-default-podcast', 42, null, '', 'tpl-default-guides'],
+		});
+		expect(merged.disabledDefaultTemplateIds).toEqual(['tpl-default-podcast', 'tpl-default-guides']);
+	});
+
+	it('falls back to base disabledDefaultTemplateIds when the stored value is not an array', () => {
+		const merged = mergeSettings(DEFAULT_SETTINGS, {
+			// @ts-expect-error deliberately invalid
+			disabledDefaultTemplateIds: 'garbage',
+		});
+		expect(merged.disabledDefaultTemplateIds).toEqual([]);
+	});
+
+	it('sanitizes ingestRules: keeps well-formed rules, drops the rest, coerces enabled to boolean', () => {
+		const merged = mergeSettings(DEFAULT_SETTINGS, {
+			ingestRules: [
+				{ folderPath: 'Voice Inbox', templateId: 'tpl-default-guides', enabled: true },
+				// @ts-expect-error non-boolean enabled coerces to false
+				{ folderPath: 'Other', templateId: 'tpl', enabled: 'yes' },
+				// @ts-expect-error missing templateId is dropped
+				{ folderPath: 'NoTemplate' },
+				// @ts-expect-error non-object is dropped
+				'garbage',
+			],
+		});
+		expect(merged.ingestRules).toEqual([
+			{ folderPath: 'Voice Inbox', templateId: 'tpl-default-guides', enabled: true },
+			{ folderPath: 'Other', templateId: 'tpl', enabled: false },
+		]);
+	});
+
+	it('ships the new Phase B whisper defaults off', () => {
+		const merged = mergeSettings(DEFAULT_SETTINGS, {});
+		expect(merged.localWhisper.autoStart).toBe(false);
+		expect(merged.localWhisper.idleStopMinutes).toBe(0);
+		expect(merged.recordInBackground).toBe(false);
+	});
 });

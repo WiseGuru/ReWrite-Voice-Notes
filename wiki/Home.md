@@ -14,6 +14,7 @@ ReWrite is an Obsidian plugin that captures speech (live recording or a pasted t
 - [Commands and menus](Commands-and-Menus) - the command palette, ribbon, editor and file menus, and Quick Record.
 - [Creating templates](Creating-Templates) - the template file format and a full guide to writing your own.
 - [Providers](Providers) - choosing and configuring transcription and LLM providers, models, diarization, context hints, and known nouns.
+- [Voxtral real-time (disabled)](Voxtral-Realtime) - the reverse-engineered Voxtral streaming protocol, why its browser-auth caveat keeps it disabled, and how to help.
 
 ### Self-hosting
 - [Self-hosting: whisper.cpp](Self-Hosting-Whisper) - on-device transcription with the plugin-managed local whisper.cpp server.

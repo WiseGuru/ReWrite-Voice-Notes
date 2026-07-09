@@ -4,12 +4,14 @@ import { ReWriteSettingTab } from './settings/tab';
 import { ReWriteModal } from './ui/modal';
 import { PassphraseModal } from './ui/passphrase-modal';
 import { QuickRecordController, startQuickRecord } from './ui/quick-record';
+import { RealtimeController, startRealtimeTranscription } from './ui/realtime';
 import { resolveActiveTextSource, resolveTextFromEditor, runTextPipeline, TextResolution } from './ui/text-source';
 import { TemplatePickerModal } from './ui/template-picker';
 import { AudioFilePickerModal } from './ui/audio-file-picker';
 import { collectAudioFiles, isAudioFile, runAudioFilePipeline } from './ui/audio-source';
+import { runIngestBatch } from './ingest';
 import { WhisperStatusBar } from './ui/whisper-status-bar';
-import { GlobalSettings, KnownNoun, NoteTemplate, PipelineHost } from './types';
+import { DestinationOverride, GlobalSettings, KnownNoun, NoteTemplate, PipelineHost } from './types';
 import { WhisperHost } from './whisper-host';
 import { bindWhisperHost } from './transcription/whisper-local';
 import { resolveActiveProfile } from './platform';
@@ -35,6 +37,11 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 	// two rapid hotkey presses would both see it null and each open a mic stream, orphaning
 	// the first one.
 	private quickRecordStarting = false;
+	// One realtime dictation session at a time, same ownership model as
+	// activeQuickRecord (single slot + a synchronous starting guard, cleaned up in
+	// onunload).
+	private activeRealtime: RealtimeController | null = null;
+	private realtimeStarting = false;
 	// Debounce timers for vault-event-triggered refreshes: an editor autosaving a template file
 	// fires several `modify` events in quick succession, and each would otherwise trigger its
 	// own full folder reload. Keyed per refresh kind so unrelated vault files don't share a timer.
@@ -64,8 +71,27 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 					new Notice(`ReWrite: adopted whisper-server from previous session (pid ${snap.pid ?? '?'}).`);
 				} else if (snap.status === 'external') {
 					new Notice(`ReWrite: detected external whisper-server on ${snap.baseUrl}. Transcription will use it; ReWrite won't stop it.`);
+				} else if (this.shouldAutoStartWhisper(snap.status)) {
+					// Auto-start (Phase B): deferred until the probe settles so an
+					// adopted or external server is never doubled up. start() itself
+					// re-probes, so a race with a manual Start stays safe.
+					void this.whisperHost.start(this.settings.localWhisper).then(() => {
+						new Notice('ReWrite: started whisper-server automatically.');
+					}).catch((e) => {
+						console.error('ReWrite: whisper-host auto-start failed', e);
+						new Notice(`ReWrite: could not auto-start whisper-server. ${e instanceof Error ? e.message : String(e)}`);
+					});
 				}
 			}).catch((e) => { console.error('ReWrite: whisper-host probe failed', e); });
+
+			// Idle stop (Phase B): a cheap once-a-minute check; stopIfIdle() is a
+			// no-op unless the server is ReWrite-owned, idle past the configured
+			// threshold, and has no transcription in flight.
+			this.registerInterval(window.setInterval(() => {
+				void this.whisperHost.stopIfIdle(this.settings.localWhisper.idleStopMinutes).then((stopped) => {
+					if (stopped) new Notice(`ReWrite: stopped whisper-server after ${this.settings.localWhisper.idleStopMinutes} min idle.`);
+				}).catch((e) => { console.error('ReWrite: whisper-host idle stop failed', e); });
+			}, 60_000));
 		}
 		this.addSettingTab(new ReWriteSettingTab(this.app, this));
 
@@ -110,6 +136,22 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 			name: 'Reprocess audio file with template',
 			callback: () => {
 				this.reprocessAudioFile();
+			},
+		});
+
+		this.addCommand({
+			id: 'process-ingest-folders',
+			name: 'Process auto-ingest folders',
+			callback: () => {
+				void runIngestBatch(this);
+			},
+		});
+
+		this.addCommand({
+			id: 'realtime-transcribe',
+			name: 'Real-time transcription (start/stop)',
+			callback: () => {
+				void this.toggleRealtime();
 			},
 		});
 
@@ -198,6 +240,8 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 	onunload(): void {
 		this.activeQuickRecord?.cancel();
 		this.activeQuickRecord = null;
+		this.activeRealtime?.cancel();
+		this.activeRealtime = null;
 		void this.whisperHost?.stop();
 		for (const handle of Object.values(this.pendingRefresh)) {
 			if (handle !== undefined) window.clearTimeout(handle);
@@ -329,6 +373,12 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 		new ReWriteModal(this.app, this).open();
 	}
 
+	private shouldAutoStartWhisper(status: string): boolean {
+		if (!this.settings.localWhisper.autoStart) return false;
+		if (resolveActiveProfile(this.settings).profile.transcriptionProvider !== 'whisper-local') return false;
+		return status === 'stopped' || status === 'crashed';
+	}
+
 	private async startWhisperHost(): Promise<void> {
 		try {
 			await this.whisperHost.start(this.settings.localWhisper);
@@ -352,7 +402,6 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 			await this.activeQuickRecord.finish();
 			return;
 		}
-		if (this.quickRecordStarting) return;
 		const commandId = `${this.manifest.id}:${opts?.fixed ? 'quick-record-fixed' : 'quick-record'}`;
 		let template: NoteTemplate | undefined;
 		if (opts?.fixed) {
@@ -362,11 +411,61 @@ export default class ReWritePlugin extends Plugin implements PipelineHost {
 				return;
 			}
 		}
+		await this.launchQuickRecord({ template, commandId });
+	}
+
+	// Entry point for the main modal's "Record in background" handoff: starts a
+	// Quick Record capture carrying the modal's per-invocation params (template,
+	// destination override, context hint). Routed through the SAME activeQuickRecord
+	// slot and quickRecordStarting guard as the two commands, so the one-recording-
+	// at-a-time guarantee holds no matter which surface starts a capture, and
+	// onunload's activeQuickRecord?.cancel() covers this path too.
+	async startBackgroundRecording(opts: {
+		template: NoteTemplate;
+		destinationOverride?: DestinationOverride;
+		contextHint?: string;
+		diarize?: boolean;
+	}): Promise<void> {
+		if (this.activeQuickRecord || this.quickRecordStarting) {
+			new Notice('ReWrite: a recording is already in progress.');
+			return;
+		}
+		await this.launchQuickRecord(opts);
+	}
+
+	isRecordingActive(): boolean {
+		return this.activeQuickRecord !== null || this.quickRecordStarting;
+	}
+
+	private async toggleRealtime(): Promise<void> {
+		if (this.activeRealtime) {
+			await this.activeRealtime.finish();
+			return;
+		}
+		if (this.realtimeStarting) return;
+		this.realtimeStarting = true;
+		try {
+			this.activeRealtime = await startRealtimeTranscription(this, () => {
+				this.activeRealtime = null;
+			});
+		} finally {
+			this.realtimeStarting = false;
+		}
+	}
+
+	private async launchQuickRecord(opts: {
+		template?: NoteTemplate;
+		commandId?: string;
+		destinationOverride?: DestinationOverride;
+		contextHint?: string;
+		diarize?: boolean;
+	}): Promise<void> {
+		if (this.quickRecordStarting) return;
 		this.quickRecordStarting = true;
 		try {
 			this.activeQuickRecord = await startQuickRecord(this, () => {
 				this.activeQuickRecord = null;
-			}, { template, commandId });
+			}, opts);
 		} finally {
 			this.quickRecordStarting = false;
 		}

@@ -48,11 +48,12 @@ Files are sorted by filename in the modal and pickers, so prefix names with `01-
 | `newFileNameTemplate` | string | Filename pattern for `newFile`, supports `{{date}}`, `{{time}}`, `{{title}}`. |
 | `disableSharedCore` | boolean | Set `true` to skip the shared core for this template (opt-out). |
 | `enableContextHint` | boolean | Set `true` to show the one-off Context field for this template (opt-in). |
-| `diarize` | boolean | Set `true` to force speaker labels on (only effective on diarization-capable providers). |
+| `diarize` | boolean | Set `true` to default the modal's "Identify speakers" checkbox ON for this template (only effective on diarization-capable providers; you can still untick it for a single run). |
 | `titleFromContent` | boolean | Set `true` to have the LLM name the new file from the content. |
 | `noteProperties` | map | Frontmatter properties the LLM fills from the content (key = property name, value = instruction). `newFile` only. |
+| `managed` | boolean (three states) | Marks a file as plugin-managed. `true` (written by Populate/Update on built-in-derived files): the Update button may reconcile it. `false`: you have untracked it; Update never touches it. Empty/absent: treated as managed when the `id` matches a built-in (how files from before this flag behave). Ignored entirely on your own templates. |
 
-Note the polarity difference: `disableSharedCore` is an opt-out (set it to turn the shared core OFF for this template), while `enableContextHint`, `diarize`, and `titleFromContent` are opt-ins (set them to turn a feature ON). Populate always writes the four boolean keys as empty stubs so they are discoverable; an empty value means "not set". Obsidian's Properties UI may store an edited boolean as text, so the parser accepts both `true` and the string `"true"`.
+Note the polarity difference: `disableSharedCore` is an opt-out (set it to turn the shared core OFF for this template), while `enableContextHint`, `diarize`, and `titleFromContent` are opt-ins (set them to turn a feature ON). Populate always writes the boolean keys as empty stubs so they are discoverable; an empty value means "not set". Obsidian's Properties UI may store an edited boolean as text, so the parser accepts both `true` and the string `"true"` (and, for `managed`, `false`/`"false"`).
 
 ## Insert modes
 
@@ -102,6 +103,19 @@ The Templates section has three buttons (see [Settings reference](Settings-Refer
 - **Populate**: adds any missing default templates plus the shared core and guide. Never overwrites your files.
 - **Update**: reconciles your default-derived templates with the current built-ins using a per-field 3-way merge. Pristine fields (never edited, matching a current or previously shipped default) are brought forward; your edits are kept. Anything it cannot auto-merge (notably an edited prompt body that diverges from a changed default) is written to `Template update report.md` next to the templates folder for you to review. Re-serializing frontmatter drops any YAML comments you added; the prompt body is left untouched.
 - **Load prior versions**: writes earlier shipped versions of the defaults as standalone, separately-named templates so you can compare prompt wording. They never collide with your live templates.
+
+Update only reconciles files it recognizes as plugin-managed (see the next section), and skips any built-in you have disabled in **Manage built-in templates**.
+
+## The managed flag: tracking, untracking, and disabling built-ins
+
+Every file Populate or Update creates carries `managed: true` in its frontmatter. That flag is how Update tells a plugin-managed copy of a built-in apart from a template you wrote yourself; a template of your own is never overwritten by Update even if it happens to share a name (or an `id`) with a built-in, because it does not carry `managed: true`.
+
+Two per-template controls live in settings under **Templates, Manage built-in templates** (an **Enabled** switch and a **Tracked** checkbox on each row):
+
+- **Enabled switch**: turning a built-in off removes its file (behind a confirmation) and remembers the choice, so Populate and Update never resurrect it, including after a plugin update re-ships it. Identity is the frontmatter `id`, so this survives renaming the file. Turn it back on any time for a fresh copy.
+- **Tracked checkbox**: unchecking it writes `managed: false` into the file. The template stays on disk and fully usable, but Update never changes it again; you have adopted it as your own. Re-check it to resume updates.
+
+An empty `managed:` key (or none at all, as in files created before this flag existed) on a file whose `id` matches a built-in is treated as tracked, which matches the old behavior; only an explicit `managed: false` opts out.
 
 ## Cross-references
 

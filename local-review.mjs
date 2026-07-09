@@ -83,12 +83,16 @@ export function parseLocalReviewConfig(raw, exists = existsSync) {
 		readyTimeoutMs: Number.isFinite(lr.readyTimeoutMs) && lr.readyTimeoutMs > 0 ? lr.readyTimeoutMs : 60_000,
 		requestTimeoutMs: Number.isFinite(lr.requestTimeoutMs) && lr.requestTimeoutMs > 0 ? lr.requestTimeoutMs : 300_000,
 		maxDiffChars: Number.isFinite(lr.maxDiffChars) && lr.maxDiffChars > 0 ? lr.maxDiffChars : 60_000,
+		// Output-token cap for the model's findings. 4096 truncated mid-review on a large diff;
+		// keep this comfortably above the length of a thorough set of findings. Make sure the
+		// server's --ctx-size in extraArgs leaves room for prompt + this many output tokens.
+		maxOutputTokens: Number.isFinite(lr.maxOutputTokens) && lr.maxOutputTokens > 0 ? lr.maxOutputTokens : 8_192,
 	};
 }
 
 // --- CLI + diff scope -------------------------------------------------------------------
 export function parseCliArgs(argv) {
-	const out = { base: null, staged: false, full: false };
+	const out = { base: null, staged: false, full: false, mode: 'code' };
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === '--base') {
@@ -100,20 +104,56 @@ export function parseCliArgs(argv) {
 			out.staged = true;
 		} else if (a === '--full') {
 			out.full = true;
+		} else if (a === '--docs') {
+			out.mode = 'docs';
+		} else if (a === '--code') {
+			out.mode = 'code';
+		} else if (a === '--mode') {
+			out.mode = argv[i + 1] === 'docs' ? 'docs' : 'code';
+			i++;
+		} else if (a.startsWith('--mode=')) {
+			out.mode = a.slice('--mode='.length) === 'docs' ? 'docs' : 'code';
 		}
 	}
 	return out;
 }
 
+// Two review jobs, deliberately separate (different prompt, different file scope, so each
+// diff stays small enough to fit the model's context): `code` hunts for bugs in the plugin
+// source, `docs` checks the Markdown docs for internal consistency. Git pathspecs: `src/`,
+// `test/` are directory prefixes; `*.mjs` / `*.md` match at any depth; `styles.css` /
+// `manifest.json` are root files.
+export const CODE_PATHS = ['src/', 'styles.css', 'test/', '*.mjs', 'manifest.json'];
+export const DOC_PATHS = ['*.md'];
+
+export function pathsForMode(mode) {
+	return mode === 'docs' ? DOC_PATHS : CODE_PATHS;
+}
+
+export function modeLabel(mode) {
+	return mode === 'docs' ? 'documentation consistency (Markdown)' : 'code (src/, styles.css, test/, scripts)';
+}
+
 // Build the `git diff` argument list for a scope. Default scope diffs the merge-base
 // against the working tree ("everything you're about to go test": staged + unstaged +
 // committed-since-branch). --staged narrows to the index; --full to the last commit only.
-export function buildDiffArgs(scope, mergeBase, { stat = false } = {}) {
+export function buildDiffArgs(scope, mergeBase, { stat = false, paths = [] } = {}) {
 	const base = ['diff'];
 	if (stat) base.push('--stat');
-	if (scope.staged) return [...base, '--staged'];
-	if (scope.full) return [...base, 'HEAD~1', 'HEAD'];
-	return [...base, mergeBase];
+	let range;
+	if (scope.staged) range = ['--staged'];
+	else if (scope.full) range = ['HEAD~1', 'HEAD'];
+	else range = [mergeBase];
+	const pathspec = paths.length > 0 ? ['--', ...paths] : [];
+	return [...base, ...range, ...pathspec];
+}
+
+// git diff excludes untracked files, but a new source file is exactly the kind of change a
+// pre-test review must not miss. This lists untracked-and-not-ignored files inside the mode's
+// pathspec; main() appends their contents to the diff so the model sees them.
+export function untrackedArgs(paths) {
+	const pathspec = paths.length > 0 ? ['--', ...paths] : [];
+	return ['ls-files', '--others', '--exclude-standard', ...pathspec];
 }
 
 export function scopeLabel(scope) {
@@ -142,10 +182,25 @@ export const REVIEW_SYSTEM_PROMPT = [
 	'Be concrete: name the file and the symptom, and give the failing input or state where you can. If you are unsure, say so rather than inventing a bug. If the diff looks clean, say that plainly. You are a first-pass filter running locally on a quantized model with no ability to explore the rest of the repo, so do not fabricate confidence.',
 ].join('\n');
 
-export function buildReviewMessages(diffText) {
+export const DOC_REVIEW_SYSTEM_PROMPT = [
+	'You are a documentation reviewer for the ReWrite (Voice Notes) plugin for Obsidian. You are given a git diff of Markdown documentation (CLAUDE.md, docs/, the wiki/, README, the release checklist).',
+	'This repo keeps several docs deliberately in sync: CLAUDE.md carries a summary plus a pointer to a deeper docs/ file; the wiki restates the user-facing parts; the README quick-start overlaps the wiki. Your job is to catch where a change to one has NOT been mirrored in the others, and where a doc now contradicts itself or reality.',
+	'Report, most important first:',
+	'',
+	'1. Internal contradictions: two docs (or two parts of one doc) that now state different things (a count, a default, a command name, a settings key, a file path, a provider list).',
+	'2. Staleness: a number, name, or claim that a code/feature change should have updated but did not (e.g. a template count, a list of defaults, a provider that was added or removed, a renamed setting).',
+	'3. Broken or dangling references: a link, filename, section title, or `[[wikilink]]` that points at something renamed or removed; a "see X" pointer whose target no longer says what is claimed.',
+	'4. Missing mirror: a behavior described in one doc that the in-sync rule says should also appear elsewhere (CLAUDE.md summary vs the deep docs/ file; wiki vs README) but is absent.',
+	'',
+	'Be concrete: name both docs and quote the conflicting phrases. Do not review prose style, grammar, or wording preferences. Do not flag the same fact appearing in two places as a duplication problem: that overlap is intentional here. If the docs look consistent, say so plainly.',
+].join('\n');
+
+export function buildReviewMessages(diffText, mode = 'code') {
+	const system = mode === 'docs' ? DOC_REVIEW_SYSTEM_PROMPT : REVIEW_SYSTEM_PROMPT;
+	const label = mode === 'docs' ? 'documentation diff' : 'git diff';
 	return [
-		{ role: 'system', content: REVIEW_SYSTEM_PROMPT },
-		{ role: 'user', content: `Here is the git diff to review:\n\n\`\`\`diff\n${diffText}\n\`\`\`` },
+		{ role: 'system', content: system },
+		{ role: 'user', content: `Here is the ${label} to review:\n\n\`\`\`diff\n${diffText}\n\`\`\`` },
 	];
 }
 
@@ -158,15 +213,17 @@ export function truncateDiff(diff, maxChars) {
 }
 
 // --- Report -----------------------------------------------------------------------------
-export function formatReport({ baseRef, mergeBase, timestamp, diffStat, findings, truncated, scope }) {
+export function formatReport({ baseRef, mergeBase, timestamp, diffStat, findings, truncated, scope, mode = 'code', untrackedCount = 0 }) {
 	const lines = [];
-	lines.push('# Local review report');
+	lines.push(`# Local review report (${mode})`);
 	lines.push('');
-	lines.push('> Advisory only. Generated by `npm run review` against a local llama.cpp model (Ornith 1.0). This is a first-pass filter, not a substitute for `/code-review` or human judgment. It always exits 0.');
+	lines.push('> Advisory only. Generated by `npm run review` against a local llama.cpp model. This is a first-pass filter, not a substitute for `/code-review` or human judgment. It always exits 0.');
 	lines.push('');
+	lines.push(`- Review mode: ${modeLabel(mode)}`);
 	lines.push(`- Base ref: \`${baseRef}\``);
 	lines.push(`- Merge base: \`${mergeBase}\``);
 	lines.push(`- Scope: ${scopeLabel(scope)}`);
+	if (untrackedCount > 0) lines.push(`- Included ${untrackedCount} untracked file(s) not yet in git.`);
 	lines.push(`- Generated: ${timestamp}`);
 	if (truncated) lines.push('- Note: the diff was truncated before review (exceeded `localReview.maxDiffChars`).');
 	lines.push('');
@@ -271,14 +328,25 @@ async function stopServer(handle) {
 	});
 }
 
-async function postReview(baseUrl, messages, requestTimeoutMs) {
+async function postReview(baseUrl, messages, requestTimeoutMs, maxOutputTokens) {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
 	try {
 		const res = await fetch(`${baseUrl}/v1/chat/completions`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ messages, temperature: 0.2, stream: false, max_tokens: 4096 }),
+			// Ask the server to disable the model's thinking channel when the chat template
+			// supports it (Gemma/Qwen-style "enable_thinking"). Reasoning models otherwise burn
+			// the whole token budget narrating the diff before emitting any findings; unknown
+			// kwargs are ignored by templates that don't reference them.
+			body: JSON.stringify({
+				messages,
+				temperature: 0.2,
+				stream: false,
+				max_tokens: maxOutputTokens,
+				chat_template_kwargs: { enable_thinking: false },
+				reasoning_effort: 'none',
+			}),
 			signal: controller.signal,
 		});
 		if (!res.ok) {
@@ -286,7 +354,27 @@ async function postReview(baseUrl, messages, requestTimeoutMs) {
 			throw new Error(`llama-server returned HTTP ${res.status}. ${body.slice(0, 300)}`);
 		}
 		const data = await res.json();
-		return data?.choices?.[0]?.message?.content ?? '(no content returned by the model)';
+		const choice = data?.choices?.[0];
+		const msg = choice?.message ?? {};
+		const content = (msg.content ?? '').trim();
+		// Reasoning models (e.g. the Gemma/Ornith "thinking" quants) stream their analysis into
+		// a separate reasoning_content field and only populate content once thinking closes. On a
+		// large diff they can hit the token cap mid-thought, leaving content empty. The reasoning
+		// IS the review, so fall back to it rather than reporting nothing.
+		const reasoning = (msg.reasoning_content ?? '').trim();
+		const finish = choice?.finish_reason ?? '(none)';
+		const usage = data?.usage ?? {};
+		if (usage.prompt_tokens) {
+			console.log(`[review] prompt_tokens=${usage.prompt_tokens} completion_tokens=${usage.completion_tokens ?? '?'} finish_reason=${finish}`);
+		}
+		if (content) return content;
+		if (reasoning) {
+			const note = finish === 'length'
+				? '> Note: the model returned only its reasoning channel and hit the output-token cap before a final summary. Raise localReview.maxOutputTokens (within the context budget) for a cleaner pass. The analysis below is complete up to the cutoff.\n\n'
+				: '> Note: the model emitted its analysis in the reasoning channel with no separate final summary.\n\n';
+			return note + reasoning;
+		}
+		return '(no content returned by the model)';
 	} finally {
 		clearTimeout(timer);
 	}
@@ -317,21 +405,34 @@ async function main() {
 
 	const cli = parseCliArgs(process.argv.slice(2));
 	const baseRef = cli.base ?? config.baseRef;
+	const paths = pathsForMode(cli.mode);
 
 	let mergeBase;
 	let diff;
 	let diffStat;
+	let untrackedCount = 0;
 	try {
 		mergeBase = execFileSync('git', ['merge-base', baseRef, 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
-		diff = execFileSync('git', buildDiffArgs(cli, mergeBase), { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-		diffStat = execFileSync('git', buildDiffArgs(cli, mergeBase, { stat: true }), { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+		diff = execFileSync('git', buildDiffArgs(cli, mergeBase, { paths }), { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+		diffStat = execFileSync('git', buildDiffArgs(cli, mergeBase, { stat: true, paths }), { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+		// git diff omits untracked files; a new source file is exactly what a pre-test review
+		// must not miss. Append each untracked-and-not-ignored file in scope as a new-file block.
+		const untracked = execFileSync('git', untrackedArgs(paths), { cwd: repoRoot, encoding: 'utf8' })
+			.split('\n').map((s) => s.trim()).filter(Boolean);
+		untrackedCount = untracked.length;
+		for (const rel of untracked) {
+			let content;
+			try { content = readFileSync(join(repoRoot, rel), 'utf8'); } catch { content = '(could not read file)'; }
+			diff += `\n\n=== NEW FILE (untracked, not yet in git): ${rel} ===\n${content}\n`;
+			diffStat += `\n ${rel} | new file (untracked)`;
+		}
 	} catch (e) {
 		printError(`git failed (is "${baseRef}" a valid ref?): ${e.message}`);
 		return;
 	}
 
 	if (!diff.trim()) {
-		console.log(`Nothing to review: no diff for scope "${scopeLabel(cli)}" against ${baseRef}. Skipping the model call.`);
+		console.log(`Nothing to review: no ${cli.mode} changes for scope "${scopeLabel(cli)}" against ${baseRef}. Skipping the model call.`);
 		return;
 	}
 
@@ -352,8 +453,8 @@ async function main() {
 			}
 		}
 
-		console.log('Sending the diff to the model for review...');
-		const findings = await postReview(baseUrl, buildReviewMessages(diffText), config.requestTimeoutMs);
+		console.log(`Sending the ${cli.mode} diff to the model for review...`);
+		const findings = await postReview(baseUrl, buildReviewMessages(diffText, cli.mode), config.requestTimeoutMs, config.maxOutputTokens);
 
 		const report = formatReport({
 			baseRef,
@@ -363,9 +464,11 @@ async function main() {
 			findings,
 			truncated,
 			scope: cli,
+			mode: cli.mode,
+			untrackedCount,
 		});
 
-		const reportPath = join(repoRoot, 'docs', 'claude-scratch', 'local-review-report.md');
+		const reportPath = join(repoRoot, 'docs', 'claude-scratch', `local-review-${cli.mode}-report.md`);
 		mkdirSync(dirname(reportPath), { recursive: true });
 		writeFileSync(reportPath, report);
 

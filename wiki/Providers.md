@@ -6,17 +6,17 @@ For fully local setups, see [Self-hosting: whisper.cpp](Self-Hosting-Whisper) an
 
 ## Transcription providers
 
-| Provider | API key | Model dropdown | Diarization | Notes |
-| --- | --- | --- | --- | --- |
-| OpenAI Whisper (`openai`) | Yes | Yes | No | 25 MB upload cap. |
-| OpenAI-compatible (`openai-compatible`) | Yes | No (type the id) | No | For self-hosted Whisper-shape servers; see base URL below. |
-| Groq (`groq`) | Yes | Yes | No | 25 MB upload cap. |
-| AssemblyAI (`assemblyai`) | Yes | No (docs link) | Yes | Large ceiling (5 GB / 10 h). |
-| Deepgram (`deepgram`) | Yes | No (docs link) | Yes | 2 GB cap. |
-| Rev.ai (`revai`) | Yes | No (docs link) | Yes | 2 GB / 17 h. |
-| Mistral Voxtral (`mistral-voxtral`) | Yes | Yes (filtered) | No | Always transcodes to WAV; 30-minute cap. |
-| Local whisper.cpp (`whisper-local`) | No | No | No | Desktop only, on-device. See [whisper.cpp](Self-Hosting-Whisper). |
-| None (`none`) | n/a | n/a | n/a | Disables recording for text-only use. |
+| Provider | API key | Model dropdown | Diarization | Real-time | Notes |
+| --- | --- | --- | --- | --- | --- |
+| OpenAI Whisper (`openai`) | Yes | Yes | No | No | 25 MB upload cap. |
+| OpenAI-compatible (`openai-compatible`) | Yes | No (type the id) | No | No | For self-hosted Whisper-shape servers; see base URL below. |
+| Groq (`groq`) | Yes | Yes | No | No | 25 MB upload cap. |
+| AssemblyAI (`assemblyai`) | Yes | No (docs link) | Yes | Yes | Large ceiling (5 GB / 10 h). |
+| Deepgram (`deepgram`) | Yes | No (docs link) | Yes | Yes | 2 GB cap. |
+| Rev.ai (`revai`) | Yes | No (docs link) | Yes | No | 2 GB / 17 h. |
+| Mistral Voxtral (`mistral-voxtral`) | Yes | Yes (filtered) | No | No | Always transcodes to WAV; 30-minute cap. (Real-time was tried but is not reachable from a browser; see below.) |
+| Local whisper.cpp (`whisper-local`) | No | No | No | No | Desktop only, on-device. See [whisper.cpp](Self-Hosting-Whisper). |
+| None (`none`) | n/a | n/a | n/a | n/a | Disables recording for text-only use. |
 
 ## LLM providers
 
@@ -70,12 +70,27 @@ The URLs above are international endpoints; China-region accounts can substitute
 
 ## Speaker diarization
 
-Diarization adds `Speaker A:` / `Speaker B:` labels and is supported only on **AssemblyAI**, **Deepgram**, and **Rev.ai**. Two switches raise the effective setting:
+Diarization adds `Speaker A:` / `Speaker B:` labels and is supported only on **AssemblyAI**, **Deepgram**, and **Rev.ai**. It is chosen **per recording**, not as a saved setting, so notes where speakers do not matter (a daily-note braindump) are not labelled by default:
 
-- The per-profile **Identify speakers** toggle (Settings).
-- A per-template `diarize: true` flag (the Meeting transcript default ships with it). The flag only ever raises the setting; it is a documented no-op on providers that cannot diarize.
+- The main modal shows an **Identify speakers** checkbox for the current recording, but only when your transcription provider supports diarization. Tick it for a meeting; leave it off for a personal note.
+- A template can set `diarize: true` in its frontmatter to make that checkbox **default on** (the Meeting transcript default ships this way). You can still untick it for a single run.
+
+The flag is a documented no-op on providers that cannot diarize. (There is no longer a profile-wide "always diarize" setting.)
 
 The labels survive cleanup because the shared core instructs the LLM to preserve them.
+
+## Real-time transcription
+
+The **Real-time transcription (start/stop)** command (see [Commands and menus](Commands-and-Menus)) streams your mic to the provider over a live connection and types the transcript at your cursor as you speak. **AssemblyAI** and **Deepgram** offer a streaming endpoint the plugin can reach; every other provider only accepts whole-file uploads.
+
+Real-time is configured **entirely on its own** — its own provider, key, and model — in the profile's **Real-time transcription** section, independent of your batch transcription provider. So you can use, say, Voxtral for recorded notes, AssemblyAI for live dictation, and Anthropic for cleanup. Pick a **Real-time provider** (or None to disable) and set its key; the streaming model usually differs from the batch model.
+
+Details worth knowing:
+
+- **Deepgram** uses your configured real-time model when it supports live streaming (the nova family does); its model field is a dropdown you can Refresh, or leave it empty for Deepgram's default. **AssemblyAI** streaming ignores the model field and mints a short-lived (60-second) session token for each start; streaming may require a funded AssemblyAI account.
+- **Voxtral real-time is not available.** We reverse-engineered the protocol and built an adapter, but Mistral's realtime endpoint rejects the only authentication a browser WebSocket can send, so it is not reachable from Obsidian and has been pulled from the build. Use AssemblyAI or Deepgram for live dictation. See [Voxtral real-time (beta)](Voxtral-Realtime) for the protocol, the auth caveat, and how to help if you know a working browser-auth path.
+- There is no template, no LLM cleanup, and no saved audio in this mode: what you say is what lands, punctuation courtesy of the provider. For cleaned, structured notes, record normally instead.
+- Works on desktop and mobile, but keep the app in the foreground: the connection and mic capture stop if the system suspends Obsidian.
 
 ## Context hint
 

@@ -10,6 +10,10 @@ export interface ConfirmModalParams {
 	confirmCls?: string;
 	// Called when the user confirms. Throw to surface an error and keep the modal open.
 	onConfirm: () => Promise<void>;
+	// Called when the modal closes without a successful confirm (Cancel button,
+	// Escape, click-outside). Lets a caller reset UI state that was optimistically
+	// flipped before opening the confirmation (e.g. a toggle).
+	onCancel?: () => void;
 }
 
 // A small generic confirmation modal. window.confirm is banned by ESLint (no-alert), and the
@@ -17,6 +21,7 @@ export interface ConfirmModalParams {
 // consequential actions that just need an OK/Cancel use this. Reuses the rewrite-modal styling.
 export class ConfirmModal extends Modal {
 	private busy = false;
+	private confirmed = false;
 
 	constructor(private readonly params: ConfirmModalParams) {
 		super(params.app);
@@ -44,6 +49,9 @@ export class ConfirmModal extends Modal {
 
 	onClose(): void {
 		this.contentEl.empty();
+		// Escape / click-outside / the Cancel button all land here; only a
+		// successful confirm suppresses the cancel hook.
+		if (!this.confirmed) this.params.onCancel?.();
 	}
 
 	private async run(): Promise<void> {
@@ -51,6 +59,7 @@ export class ConfirmModal extends Modal {
 		this.busy = true;
 		try {
 			await this.params.onConfirm();
+			this.confirmed = true;
 			this.close();
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);

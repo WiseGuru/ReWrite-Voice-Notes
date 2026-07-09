@@ -4,6 +4,7 @@ import {
 	ActiveProfileOverride,
 	EnvironmentProfile,
 	GlobalSettings,
+	IngestRule,
 	LLMConfig,
 	LLMProviderID,
 	LocalWhisperSettings,
@@ -54,6 +55,8 @@ const DESKTOP_DEFAULT_PROFILE: EnvironmentProfile = {
 	transcriptionConfig: { ...EMPTY_TRANSCRIPTION_CONFIG },
 	llmProvider: 'anthropic',
 	llmConfig: { ...EMPTY_LLM_CONFIG },
+	realtimeProvider: 'none',
+	realtimeConfig: { ...EMPTY_TRANSCRIPTION_CONFIG },
 };
 
 const MOBILE_DEFAULT_PROFILE: EnvironmentProfile = {
@@ -62,6 +65,8 @@ const MOBILE_DEFAULT_PROFILE: EnvironmentProfile = {
 	transcriptionConfig: { ...EMPTY_TRANSCRIPTION_CONFIG },
 	llmProvider: 'anthropic',
 	llmConfig: { ...EMPTY_LLM_CONFIG },
+	realtimeProvider: 'none',
+	realtimeConfig: { ...EMPTY_TRANSCRIPTION_CONFIG },
 };
 
 const DEFAULT_LOCAL_WHISPER: LocalWhisperSettings = {
@@ -69,6 +74,8 @@ const DEFAULT_LOCAL_WHISPER: LocalWhisperSettings = {
 	modelPath: '',
 	port: 8080,
 	extraArgs: '',
+	autoStart: false,
+	idleStopMinutes: 0,
 };
 
 export const DEFAULT_SETTINGS: GlobalSettings = {
@@ -89,6 +96,9 @@ export const DEFAULT_SETTINGS: GlobalSettings = {
 	knownNounsPath: 'ReWrite/KnownNouns.md',
 	modelCache: { transcription: {}, llm: {} },
 	localWhisper: DEFAULT_LOCAL_WHISPER,
+	recordInBackground: false,
+	disabledDefaultTemplateIds: [],
+	ingestRules: [],
 };
 
 const PROFILE_KINDS: ActiveProfileKind[] = ['desktop', 'mobile'];
@@ -101,6 +111,10 @@ function profileTranscriptionKeyId(kind: ActiveProfileKind): string {
 
 function profileLLMKeyId(kind: ActiveProfileKind): string {
 	return `profile-${kind}-llm`;
+}
+
+function profileRealtimeKeyId(kind: ActiveProfileKind): string {
+	return `profile-${kind}-realtime`;
 }
 
 export async function loadSettings(plugin: Plugin): Promise<GlobalSettings> {
@@ -124,6 +138,8 @@ export async function hydrateSecrets(plugin: Plugin, settings: GlobalSettings): 
 		profile.transcriptionConfig.apiKey = trKey ?? '';
 		const llmKey = all[profileLLMKeyId(kind)];
 		profile.llmConfig.apiKey = llmKey ?? '';
+		const rtKey = all[profileRealtimeKeyId(kind)];
+		profile.realtimeConfig.apiKey = rtKey ?? '';
 	}
 }
 
@@ -133,6 +149,7 @@ async function persistSecrets(plugin: Plugin, settings: GlobalSettings): Promise
 		const profile = profileFor(settings, kind);
 		updates[profileTranscriptionKeyId(kind)] = profile.transcriptionConfig.apiKey;
 		updates[profileLLMKeyId(kind)] = profile.llmConfig.apiKey;
+		updates[profileRealtimeKeyId(kind)] = profile.realtimeConfig.apiKey;
 	}
 	await saveManyKeys(plugin, updates);
 }
@@ -150,6 +167,7 @@ function stripProfileKeys(profile: EnvironmentProfile): EnvironmentProfile {
 		...profile,
 		transcriptionConfig: { ...profile.transcriptionConfig, apiKey: '' },
 		llmConfig: { ...profile.llmConfig, apiKey: '' },
+		realtimeConfig: { ...profile.realtimeConfig, apiKey: '' },
 	};
 }
 
@@ -180,7 +198,30 @@ export function mergeSettings(
 			},
 		},
 		localWhisper: { ...base.localWhisper, ...(isPlainObject(partial.localWhisper) ? partial.localWhisper : {}) },
+		disabledDefaultTemplateIds: sanitizeDisabledIds(partial.disabledDefaultTemplateIds, base.disabledDefaultTemplateIds),
+		ingestRules: sanitizeIngestRules(partial.ingestRules, base.ingestRules),
 	};
+}
+
+// Arrays from a corrupt/hand-edited data.json need explicit shape checks (a spread
+// can't validate element shape the way pickEnum does for scalars). Non-arrays fall
+// back to base; malformed elements are dropped. Exported for tests.
+export function sanitizeDisabledIds(value: unknown, fallback: string[]): string[] {
+	if (!Array.isArray(value)) return fallback;
+	return value.filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+}
+
+export function sanitizeIngestRules(value: unknown, fallback: IngestRule[]): IngestRule[] {
+	if (!Array.isArray(value)) return fallback;
+	const rules: IngestRule[] = [];
+	for (const raw of value) {
+		if (!isPlainObject(raw)) continue;
+		const folderPath = typeof raw.folderPath === 'string' ? raw.folderPath : '';
+		const templateId = typeof raw.templateId === 'string' ? raw.templateId : '';
+		if (!folderPath.trim() || !templateId.trim()) continue;
+		rules.push({ folderPath, templateId, enabled: raw.enabled === true });
+	}
+	return rules;
 }
 
 function mergeProfile(
@@ -193,6 +234,7 @@ function mergeProfile(
 		...partial,
 		transcriptionProvider: pickEnum(TRANSCRIPTION_PROVIDER_IDS, partial.transcriptionProvider, base.transcriptionProvider),
 		llmProvider: pickEnum(LLM_PROVIDER_IDS, partial.llmProvider, base.llmProvider),
+		realtimeProvider: pickEnum(TRANSCRIPTION_PROVIDER_IDS, partial.realtimeProvider, base.realtimeProvider),
 		transcriptionConfig: {
 			...base.transcriptionConfig,
 			...(isPlainObject(partial.transcriptionConfig) ? partial.transcriptionConfig : {}),
@@ -200,6 +242,10 @@ function mergeProfile(
 		llmConfig: {
 			...base.llmConfig,
 			...(isPlainObject(partial.llmConfig) ? partial.llmConfig : {}),
+		},
+		realtimeConfig: {
+			...base.realtimeConfig,
+			...(isPlainObject(partial.realtimeConfig) ? partial.realtimeConfig : {}),
 		},
 	};
 }

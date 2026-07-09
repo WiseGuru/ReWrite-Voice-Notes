@@ -56,6 +56,19 @@
 	border-radius: 4px;
 }
 
+.rewrite-modal .rewrite-diarize-row {
+	margin-bottom: 12px;
+}
+
+.rewrite-modal .rewrite-diarize-label {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+
 .rewrite-modal .rewrite-context-summary {
 	cursor: pointer;
 	user-select: none;
@@ -128,6 +141,17 @@
 	border-radius: 4px;
 	background-color: var(--background-modifier-error);
 	color: var(--text-on-accent);
+	font-size: var(--font-ui-small);
+}
+
+/* Caution (not error): yellow outline + text so an app-switch reads as an alert, not a problem. */
+.rewrite-modal .rewrite-mobile-record-warning {
+	margin-top: 8px;
+	padding: 6px 10px;
+	border-radius: 4px;
+	background-color: var(--background-secondary);
+	border: 1px solid var(--text-warning);
+	color: var(--text-warning);
 	font-size: var(--font-ui-small);
 }
 
@@ -290,6 +314,18 @@
 	border-radius: 4px;
 	background-color: var(--background-modifier-error);
 	color: var(--text-on-accent);
+	font-size: var(--font-ui-smaller);
+	max-width: 28ch;
+}
+
+/* Caution (not error): yellow so leaving the app reads as an alert, not a problem. */
+.rewrite-quick-floater .rewrite-quick-mobile-warning {
+	margin-top: 6px;
+	padding: 4px 8px;
+	border-radius: 4px;
+	background-color: var(--background-secondary);
+	border: 1px solid var(--text-warning);
+	color: var(--text-warning);
 	font-size: var(--font-ui-smaller);
 	max-width: 28ch;
 }
@@ -608,3 +644,75 @@
 	min-height: 80px;
 }
 
+
+/* "Record in background" checkbox on the main modal's Record tab (desktop only) */
+.rewrite-modal .rewrite-background-record {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 10px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+/* "Manage built-in templates" disclosure in the Templates settings section */
+.rewrite-settings .rewrite-manage-defaults {
+	margin: 8px 0 12px 0;
+}
+
+.rewrite-settings .rewrite-manage-defaults > summary {
+	cursor: pointer;
+	user-select: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	padding: 4px 0;
+}
+
+/* Bold the Enabled / Tracked terms in the legend so they tie to the row controls. */
+.rewrite-settings .rewrite-manage-legend-term {
+	font-weight: var(--font-semibold);
+	color: var(--text-normal);
+}
+
+/* Row controls: keep the labelled Tracked checkbox and the Enabled switch on one
+ * line with comfortable spacing, wrapping only if the row is very narrow. */
+.rewrite-settings .rewrite-manage-row .setting-item-control {
+	gap: 14px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+
+.rewrite-settings .rewrite-manage-check {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.rewrite-settings .rewrite-manage-check input {
+	margin: 0;
+	cursor: pointer;
+}
+
+/* "Enabled" caption sits just left of the switch so the switch is self-describing. */
+.rewrite-settings .rewrite-manage-switch-label {
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+	white-space: nowrap;
+}
+
+/* Realtime dictation floater: reuses the quick-floater shell; the interim line
+ * shows the rolling in-progress hypothesis under the controls row. */
+.rewrite-realtime-floater .rewrite-realtime-interim {
+	max-width: 36ch;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	overflow: hidden;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+}

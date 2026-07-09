@@ -10,6 +10,7 @@ You bring your own provider keys. Nothing is sent to a ReWrite server; the plugi
 - Bring-your-own keys across 8 transcription and 5 LLM providers, cloud or fully local; nothing goes to a ReWrite server.
 - 10 editable Markdown templates (general cleanup, todo, daily note, meeting, lecture, podcast, guides, book log, and more) plus a shared-core baseline you edit once.
 - Speaker diarization, saved-audio embeds, spoken ad-hoc instructions, known-nouns preservation, and per-run destination overrides.
+- Background recording from the main modal, real-time dictation at the cursor (Deepgram / AssemblyAI), and auto-ingest folders that batch-process audio dropped in from outside Obsidian.
 - API keys encrypted at rest (OS secret storage, or an Argon2id/PBKDF2 passphrase) on desktop and mobile.
 
 ## Quick start

@@ -3,7 +3,7 @@ import type ReWritePlugin from '../main';
 import { PipelineSource, runPipeline } from '../pipeline';
 import { isMediaRecorderAvailable, resolveActiveProfile } from '../platform';
 import { Recorder } from '../recorder';
-import { NoteTemplate } from '../types';
+import { DestinationOverride, NoteTemplate } from '../types';
 import { isProfileConfigured } from './setup-card';
 import { ReWriteModal } from './modal';
 import { formatDuration, stageLabel } from './pipeline-progress';
@@ -11,6 +11,9 @@ import { formatDuration, stageLabel } from './pipeline-progress';
 // Continuous silence (ms) before the Quick Record floater warns about a muted / dead mic.
 const SILENCE_WARNING_MS = 3000;
 const SILENCE_WARNING_TEXT = 'No audio detected. Check that your microphone is on and not muted.';
+// Mobile-only caution shown while recording: backgrounding the app suspends the Capacitor
+// WebView and stops the capture (the wake lock prevents screen-sleep, not an app switch).
+const MOBILE_RECORD_WARNING_TEXT = 'Keep Obsidian in the foreground. Switching to another app stops the recording.';
 
 export class QuickRecordController {
 	private recorder: Recorder | null = null;
@@ -22,14 +25,24 @@ export class QuickRecordController {
 	// working after recording stops, instead of becoming a no-op once processing starts (a
 	// hung transcription/LLM call previously had no way to be stopped short of reloading).
 	private controller: AbortController | null = null;
+	// Per-invocation params handed off by the main modal's "Record in background"
+	// path. Both belong to the template they were set up against, so switching the
+	// template via the floater's popover clears them.
+	private destinationOverride: DestinationOverride | undefined;
+	private contextHint: string | undefined;
+	private diarize: boolean | undefined;
 
 	constructor(
 		private readonly plugin: ReWritePlugin,
 		template: NoteTemplate,
 		private readonly onDispose: () => void,
 		private readonly stopHotkey: string | null = null,
+		extras?: { destinationOverride?: DestinationOverride; contextHint?: string; diarize?: boolean },
 	) {
 		this.template = template;
+		this.destinationOverride = extras?.destinationOverride;
+		this.contextHint = extras?.contextHint;
+		this.diarize = extras?.diarize;
 	}
 
 	async begin(): Promise<void> {
@@ -44,6 +57,14 @@ export class QuickRecordController {
 			getTemplates: () => this.plugin.templates,
 			getActiveTemplateId: () => this.template.id,
 			onPickTemplate: (t) => {
+				if (t.id !== this.template.id) {
+					// The handed-off destination override / context hint / diarize choice
+					// were set up against the original template; a different pick invalidates
+					// them (the new template's own `diarize` flag then governs).
+					this.destinationOverride = undefined;
+					this.contextHint = undefined;
+					this.diarize = undefined;
+				}
 				this.template = t;
 				this.floater?.setTemplateName(t.name);
 			},
@@ -85,6 +106,9 @@ export class QuickRecordController {
 				profile,
 				template: this.template,
 				source,
+				destinationOverride: this.destinationOverride,
+				contextHint: this.contextHint,
+				diarize: this.diarize,
 				signal: this.controller.signal,
 				onStage: (stage) => this.floater?.setBusy(stageLabel(stage)),
 			});
@@ -122,7 +146,15 @@ export class QuickRecordController {
 export async function startQuickRecord(
 	plugin: ReWritePlugin,
 	onDispose: () => void,
-	opts?: { template?: NoteTemplate; commandId?: string },
+	opts?: {
+		template?: NoteTemplate;
+		commandId?: string;
+		// Set by the main modal's "Record in background" handoff; carried into the
+		// pipeline run exactly like the modal's own detached path would.
+		destinationOverride?: DestinationOverride;
+		contextHint?: string;
+		diarize?: boolean;
+	},
 ): Promise<QuickRecordController | null> {
 	const settings = plugin.settings;
 	const { profile } = resolveActiveProfile(settings);
@@ -159,7 +191,11 @@ export async function startQuickRecord(
 	}
 
 	const stopHotkey = opts?.commandId ? formatCommandHotkey(plugin.app, opts.commandId) : null;
-	const controller = new QuickRecordController(plugin, template, onDispose, stopHotkey);
+	const controller = new QuickRecordController(plugin, template, onDispose, stopHotkey, {
+		destinationOverride: opts?.destinationOverride,
+		contextHint: opts?.contextHint,
+		diarize: opts?.diarize,
+	});
 	try {
 		await controller.begin();
 	} catch (e) {
@@ -229,6 +265,7 @@ class QuickRecordFloater {
 	private readonly el: HTMLElement;
 	private readonly timerEl: HTMLElement;
 	private readonly warningEl: HTMLElement;
+	private readonly mobileWarningEl: HTMLElement | null;
 	private readonly templateBtn: HTMLButtonElement;
 	private readonly templateLabel: HTMLElement;
 	private popover: HTMLElement | null = null;
@@ -291,6 +328,12 @@ class QuickRecordFloater {
 			text: SILENCE_WARNING_TEXT,
 		});
 		this.warningEl.hide();
+
+		// Mobile-only: shown for the whole capture (the floater exists only while recording /
+		// processing), hidden once the pipeline takes over in setBusy.
+		this.mobileWarningEl = Platform.isMobile
+			? this.el.createDiv({ cls: 'rewrite-quick-mobile-warning', text: MOBILE_RECORD_WARNING_TEXT })
+			: null;
 	}
 
 	setSilenceWarning(show: boolean): void {
@@ -311,6 +354,7 @@ class QuickRecordFloater {
 		this.timerEl.setText(label);
 		this.templateBtn.disabled = true;
 		this.warningEl.hide();
+		this.mobileWarningEl?.hide();
 		this.closePopover();
 	}
 

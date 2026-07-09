@@ -50,6 +50,7 @@ export class Notice {
 
 export class TFile {
 	path = '';
+	name = '';
 	basename = '';
 	extension = '';
 	stat = { mtime: 0, ctime: 0, size: 0 };

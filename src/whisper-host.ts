@@ -130,6 +130,27 @@ const READY_TIMEOUT_MS = 5_000;
 const READY_POLL_MS = 250;
 const STOP_KILL_GRACE_MS = 3_000;
 
+// Pure idle-stop decision, extracted so it is unit-testable without a live
+// process. Only a ReWrite-owned server (spawned or adopted) is ever idle-stopped:
+// external servers were started by someone else and are never our call to stop.
+// A transcription in flight (inFlightUses > 0) always blocks the stop, even past
+// the deadline, so a long job on a big model is never killed under the user.
+export function shouldStopWhenIdle(
+	status: WhisperStatus,
+	ownership: WhisperOwnership | null,
+	inFlightUses: number,
+	lastActivityAt: number | null,
+	idleStopMinutes: number,
+	now: number,
+): boolean {
+	if (idleStopMinutes <= 0) return false;
+	if (status !== 'running') return false;
+	if (ownership !== 'spawned' && ownership !== 'adopted') return false;
+	if (inFlightUses > 0) return false;
+	if (lastActivityAt === null) return false;
+	return now - lastActivityAt >= idleStopMinutes * 60_000;
+}
+
 export class WhisperHost {
 	private statusValue: WhisperStatus = 'stopped';
 	private child: SpawnedChild | null = null;
@@ -138,8 +159,42 @@ export class WhisperHost {
 	private ownershipValue: WhisperOwnership | null = null;
 	private logBuffer = '';
 	private stoppingDeliberately = false;
+	// Idle-stop bookkeeping: when the server last did something on our behalf
+	// (start, adopt, or a transcription finishing) and how many transcriptions are
+	// currently in flight against it.
+	private lastActivityAt: number | null = null;
+	private inFlightUses = 0;
 
 	constructor(private plugin: Plugin) {}
+
+	// Bracket a transcription request against the hosted server so the idle-stop
+	// timer neither counts an in-flight job as idle time nor stops mid-job.
+	beginUse(): void {
+		this.inFlightUses++;
+		this.lastActivityAt = Date.now();
+	}
+
+	endUse(): void {
+		this.inFlightUses = Math.max(0, this.inFlightUses - 1);
+		this.lastActivityAt = Date.now();
+	}
+
+	// Called on an interval from main.ts. Stops a ReWrite-owned server that has
+	// been idle past the configured threshold; a no-op in every other state.
+	async stopIfIdle(idleStopMinutes: number): Promise<boolean> {
+		if (!shouldStopWhenIdle(
+			this.statusValue,
+			this.ownershipValue,
+			this.inFlightUses,
+			this.lastActivityAt,
+			idleStopMinutes,
+			Date.now(),
+		)) {
+			return false;
+		}
+		await this.stop();
+		return true;
+	}
 
 	status(): WhisperStatus {
 		return this.statusValue;
@@ -261,6 +316,7 @@ export class WhisperHost {
 			}
 			if (await isPortReachable(api.net, port)) {
 				this.statusValue = 'running';
+				this.lastActivityAt = Date.now();
 				if (child.pid !== undefined) {
 					await this.writePidFile({
 						pid: child.pid,
@@ -390,6 +446,9 @@ export class WhisperHost {
 			this.ownershipValue = 'adopted';
 			this.currentPort = port;
 			this.currentPid = record.pid;
+			// Adoption counts as activity so the idle-stop clock starts now rather
+			// than never (an adopted server has no start() timestamp this session).
+			this.lastActivityAt = Date.now();
 			return this.snapshot();
 		}
 		// Bound by someone else. Clear stale sidecar if present.

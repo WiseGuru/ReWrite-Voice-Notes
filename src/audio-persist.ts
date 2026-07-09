@@ -57,13 +57,28 @@ export function buildAudioFilename(now: Date, ext: string): string {
 export async function persistAudio(app: App, blob: Blob, settings: GlobalSettings): Promise<string> {
 	const ext = mimeToExtension(blob.type);
 	const filename = buildAudioFilename(new Date(), ext);
-	const path = await resolveTargetPath(app, filename, settings.attachmentsFolderPath);
+	const path = await resolveAttachmentPath(app, filename, settings.attachmentsFolderPath);
 	const buffer = await blob.arrayBuffer();
 	await app.vault.createBinary(path, buffer);
 	return path;
 }
 
-async function resolveTargetPath(app: App, filename: string, configuredFolder: string): Promise<string> {
+// Where a recording lands: the configured attachments folder (with manual
+// de-collision) when set, otherwise Obsidian's own attachments setting via
+// getAvailablePathForAttachment. Exported so the auto-ingest mover resolves the
+// same destination a live recording would get. `sourcePath` (the note the
+// attachment belongs to) lets a note-relative attachment setting resolve
+// correctly; it is harmless for the recording flow (no note yet). The parent
+// folder of the resolved path is always created, because a caller that MOVES a
+// file into it via `fileManager.renameFile` (auto-ingest) fails when the folder
+// is missing (unlike `vault.create` / `createBinary`, rename does not create
+// intermediate folders).
+export async function resolveAttachmentPath(
+	app: App,
+	filename: string,
+	configuredFolder: string,
+	sourcePath = '',
+): Promise<string> {
 	const folder = configuredFolder.trim();
 	if (folder) {
 		await ensureFolder(app, folder);
@@ -72,9 +87,39 @@ async function resolveTargetPath(app: App, filename: string, configuredFolder: s
 	}
 	const fm = (app as unknown as { fileManager?: AttachmentFileManager }).fileManager;
 	if (fm?.getAvailablePathForAttachment) {
-		return await fm.getAvailablePathForAttachment(filename);
+		const resolved = await fm.getAvailablePathForAttachment(filename, sourcePath);
+		await ensureParentFolder(app, resolved);
+		return resolved;
 	}
 	return await deCollide(app, normalizePath(filename));
+}
+
+// The folder a recording WOULD be stored in, resolved the same way as
+// resolveAttachmentPath but WITHOUT creating anything (no ensureFolder). Auto-ingest
+// uses this to detect, before processing a file, that a rule's folder is also the
+// attachments destination (which would make the move a pointless in-place rename and
+// re-ingest the file every run). `sourcePath` lets a note-relative attachment setting
+// resolve representatively (pass a path in the note's target folder).
+export async function resolveAttachmentFolder(
+	app: App,
+	configuredFolder: string,
+	sourcePath = '',
+): Promise<string> {
+	const folder = configuredFolder.trim();
+	if (folder) return normalizePath(folder);
+	const fm = (app as unknown as { fileManager?: AttachmentFileManager }).fileManager;
+	if (fm?.getAvailablePathForAttachment) {
+		const resolved = normalizePath(await fm.getAvailablePathForAttachment('rewrite-probe.webm', sourcePath));
+		return resolved.includes('/') ? resolved.slice(0, resolved.lastIndexOf('/')) : '';
+	}
+	return '';
+}
+
+async function ensureParentFolder(app: App, filePath: string): Promise<void> {
+	const normalized = normalizePath(filePath);
+	const slash = normalized.lastIndexOf('/');
+	if (slash <= 0) return; // vault root: nothing to create
+	await ensureFolder(app, normalized.slice(0, slash));
 }
 
 async function ensureFolder(app: App, folder: string): Promise<void> {

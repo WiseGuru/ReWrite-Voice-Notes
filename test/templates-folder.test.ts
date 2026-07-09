@@ -117,4 +117,39 @@ describe('mergeTemplate', () => {
 		expect(merged.noteProperties).toEqual([{ name: 'subject', instruction: 'fill this in' }]);
 		expect(changes.some((c) => c.includes('subject'))).toBe(true);
 	});
+
+	// Update only ever merges tracked default-derived files, so the reconciled
+	// output is stamped managed: true (back-filling pre-flag files too).
+	it('stamps managed: true on the merged result', () => {
+		const def = baseTemplate();
+		const onDisk = baseTemplate(); // no managed key, like a pre-flag file
+		const { merged } = mergeTemplate(onDisk, def, []);
+		expect(merged.managed).toBe(true);
+	});
+});
+
+describe('managed flag round trip', () => {
+	it('round-trips managed: true', () => {
+		const rendered = renderTemplateFile(baseTemplate({ managed: true }));
+		expect(parseTemplateContent(fakeFile('x'), rendered)?.managed).toBe(true);
+	});
+
+	it('round-trips managed: false (untracked)', () => {
+		const rendered = renderTemplateFile(baseTemplate({ managed: false }));
+		expect(parseTemplateContent(fakeFile('x'), rendered)?.managed).toBe(false);
+	});
+
+	// Tri-state: an absent/empty key must stay undefined, NOT collapse to false,
+	// because absent means "tracked when the id matches a built-in" (old files)
+	// while explicit false means "user untracked it; never touch".
+	it('parses an absent/empty managed key as undefined, not false', () => {
+		const rendered = renderTemplateFile(baseTemplate());
+		expect(rendered).toContain('managed:');
+		expect(parseTemplateContent(fakeFile('x'), rendered)?.managed).toBeUndefined();
+	});
+
+	it('tolerates the string forms written by the Properties UI', () => {
+		const content = '---\nid: t\nmanaged: "false"\n---\nBody.';
+		expect(parseTemplateContent(fakeFile('x'), content)?.managed).toBe(false);
+	});
 });
