@@ -19,7 +19,7 @@ npm run review        # advisory local code review of the working-tree diff
 npm run review:docs   # advisory local doc-consistency review
 ```
 
-- `build`/`lint`/`test` are release blockers if they fail.
+- `build`/`lint`/`test` are release blockers if they fail. `npm run lint` is configured to mirror the Obsidian community-review bot for the classes that previously slipped through to submission: the type-checked `@typescript-eslint` rules (`no-deprecated` / `no-unsafe-*` / `no-unnecessary-type-assertion`), `no-unsupported-api` (an Obsidian API newer than `manifest.json`'s `minAppVersion`), and `noInlineConfig` (an `eslint-disable` can no longer silence a rule). If lint fails on one of these, it is doing its job; do not work around it with a disable comment. See RELEASING.md's guideline-conflict checklist.
 - The two `review` runs are **advisory** (always exit 0). Read the reports in `docs/claude-scratch/local-review-<mode>-report.md` and surface anything real. They will not block, and they are imperfect (local, quantized model), so treat findings as a first-pass filter, not a gate.
 - **If a review report says "(no findings returned)" or looks empty/garbled**, it is almost always a model/tooling issue, not a clean bill of health — see `docs/DEV_TOOLING.md` Gotchas (reasoning models need thinking disabled; the context must fit the prompt; a huge diff truncates). Fix the tooling or note it; do not read empty output as "no problems."
 

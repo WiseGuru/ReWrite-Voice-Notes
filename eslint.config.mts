@@ -1,5 +1,12 @@
 import tseslint from 'typescript-eslint';
 import obsidianmd from "eslint-plugin-obsidianmd";
+// The Obsidian community-review bot runs a newer eslint-plugin-obsidianmd than our
+// pinned 0.1.9 base, whose `no-unsupported-api` rule (flags a direct Obsidian API call
+// newer than manifest `minAppVersion`) is what caught `FileManager.trashFile` at
+// submission. We keep 0.1.9 as the base config (its `ui/sentence-case` is the one the bot
+// actually enforces; 0.4.x's is over-aggressive and produces wrong fixes), and cherry-pick
+// ONLY that one rule from a 0.4.1 alias so the minAppVersion check runs locally too.
+import obsidianmdLatest from "obsidianmd-latest";
 import globals from "globals";
 import { globalIgnores } from "eslint/config";
 
@@ -55,6 +62,15 @@ const sentenceCaseOptions = {
 
 export default tseslint.config(
 	{
+		// The community-review bot rejects `eslint-disable` directives (it flags both the
+		// undescribed comment and disabling a rule at all). `noInlineConfig` makes every inline
+		// eslint directive inert, so a rule (ours or the bot's) cannot be silenced from a
+		// comment: an attempt to suppress a real error just leaves the error in place and fails
+		// `npm run lint`. Reach APIs outside the typed/deprecated surface through local
+		// type-aliases instead (see src/realtime/pcm.ts), never a disable comment.
+		linterOptions: {
+			noInlineConfig: true,
+		},
 		languageOptions: {
 			globals: {
 				...globals.browser,
@@ -99,6 +115,18 @@ export default tseslint.config(
 			'@typescript-eslint/no-unsafe-argument': 'error',
 			'@typescript-eslint/no-unsafe-return': 'error',
 			'@typescript-eslint/no-unnecessary-type-assertion': 'error',
+		},
+	},
+	{
+		// Cherry-picked from the 0.4.1 alias (see the import comment): the single rule that
+		// flags a direct Obsidian API newer than manifest `minAppVersion`. Registering the
+		// plugin only makes its rules available; nothing else from 0.4.1 runs unless enabled
+		// here, so its divergent sentence-case rule stays off. This is the check that would
+		// have caught `trashFile` locally before the 1.2.0 submission.
+		files: ['src/**/*.ts'],
+		plugins: { 'obsidianmd-latest': obsidianmdLatest },
+		rules: {
+			'obsidianmd-latest/no-unsupported-api': 'error',
 		},
 	},
 	{
