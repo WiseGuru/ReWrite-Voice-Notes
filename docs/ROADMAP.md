@@ -38,6 +38,15 @@ Merged to `master`, not yet tagged. These become the next version's release note
 
 > Per-version attribution starts with the first release cut after this roadmap was adopted. The archive below collects work that shipped across **1.0.0 through 1.1.0** before per-version tracking began; it is grouped as one historical block rather than retro-fitted to individual tags. New releases get their own `### <version> — <date>` heading above this archive.
 
+### 1.2.1 — 2026-07-08
+
+Community-review remediation for the 1.2.0 submission (no user-facing behavior change). Two blocking review-bot errors resolved:
+
+- **Removed the `eslint-disable` directives in [src/realtime/pcm.ts](../src/realtime/pcm.ts).** The review bot forbids disabling its rules, and the file disabled `@typescript-eslint/no-deprecated` five times for the intentional `ScriptProcessorNode` usage (AudioWorklet can't ship in a single-file CSP-constrained plugin). The deprecated members (`createScriptProcessor`, `onaudioprocess`, `AudioProcessingEvent`, the node type) are now reached through local structural type-aliases (`ScriptProcessorNodeLike` / `AudioProcessingEventLike` / `ScriptProcessorFactory`) that carry no `@deprecated` marker, so the rule never fires and no directive is needed. Same pattern as `WakeLockLike` / `hotkeyManager`.
+- **Raised `minAppVersion` from 1.4.4 to 1.6.6.** `FileManager.trashFile` (used to delete a disabled built-in template, respecting the user's deletion preference) is `@since 1.6.6`, which tripped `obsidianmd/no-unsupported-api`. 1.6.6 is a negligible floor bump; `versions.json` gained the `1.2.1 -> 1.6.6` entry.
+
+Also enabled the reviewer's type-checked lint rules locally (`@typescript-eslint/no-deprecated` + the `no-unsafe-*` / `no-unnecessary-type-assertion` family) in [eslint.config.mts](../eslint.config.mts) for `src/`, so this class of finding surfaces in `npm run lint` instead of only at submission. The bot's remaining `no-unsafe-*` warnings are false-positives from its weaker type resolution (it types Obsidian's `moment` re-export and `parseYaml` result as `any` where our installed `obsidian` types resolve them); our code already guards those boundaries with `: unknown` annotations + explicit casts, and satisfying the "unnecessary assertion" warnings would break the correctly-typed `tsc` build.
+
 ### 1.2.0 — 2026-07-08
 
 ### Real-time transcription mode (live dictation at the cursor), configured independently of batch

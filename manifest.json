@@ -1,8 +1,8 @@
 {
 	"id": "rewrite-voice-notes",
 	"name": "ReWrite (Voice Notes)",
-	"version": "1.2.0",
-	"minAppVersion": "1.4.4",
+	"version": "1.2.1",
+	"minAppVersion": "1.6.6",
 	"description": "Record or paste speech and have it transcribed and structured by AI.",
 	"author": "WiseGuru",
 	"authorUrl": "https://github.com/WiseGuru",

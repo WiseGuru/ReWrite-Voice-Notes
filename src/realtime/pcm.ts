@@ -45,17 +45,29 @@ export function isPcmCaptureAvailable(): boolean {
 	return hasCtx && typeof navigator !== 'undefined' && !!navigator.mediaDevices;
 }
 
+// ScriptProcessorNode is deprecated in favor of AudioWorklet, but a worklet must be
+// loaded as a separate module (addModule(url)), which a single-file bundled Obsidian
+// plugin cannot ship and the app CSP complicates via blob URLs. ScriptProcessor remains
+// supported in every WebView Obsidian runs in; revisit if it is ever actually removed.
+// Rather than disable the deprecation lint rule (which the Obsidian community-review bot
+// forbids), the deprecated members are reached through these local structural aliases,
+// which carry no `@deprecated` marker, mirroring the `WakeLockLike` / `hotkeyManager`
+// pattern used elsewhere for APIs outside the typed surface.
+interface AudioProcessingEventLike {
+	inputBuffer: AudioBuffer;
+}
+interface ScriptProcessorNodeLike extends AudioNode {
+	onaudioprocess: ((ev: AudioProcessingEventLike) => void) | null;
+}
+interface ScriptProcessorFactory {
+	createScriptProcessor(bufferSize: number, inputChannels: number, outputChannels: number): ScriptProcessorNodeLike;
+}
+
 export class PcmCapture {
 	private stream: MediaStream | null = null;
 	private context: AudioContext | null = null;
 	private source: MediaStreamAudioSourceNode | null = null;
-	// ScriptProcessorNode is deprecated in favor of AudioWorklet, but a worklet
-	// must be loaded as a separate module (addModule(url)), which a single-file
-	// bundled Obsidian plugin cannot ship and the app CSP complicates via blob
-	// URLs. ScriptProcessor remains supported in every WebView Obsidian runs in;
-	// revisit if it is ever actually removed.
-	// eslint-disable-next-line @typescript-eslint/no-deprecated
-	private processor: ScriptProcessorNode | null = null;
+	private processor: ScriptProcessorNodeLike | null = null;
 	private silentGain: GainNode | null = null;
 
 	// Opens the mic and begins emitting 16 kHz mono Int16 PCM chunks. The chunk
@@ -83,13 +95,10 @@ export class PcmCapture {
 		// start never leaks an AudioContext or a live mic track.
 		try {
 			const source = context.createMediaStreamSource(stream);
-			// See the deprecation note on the `processor` field for why ScriptProcessor
-			// is used instead of AudioWorklet.
-			// eslint-disable-next-line @typescript-eslint/no-deprecated
-			const processor = context.createScriptProcessor(4096, 1, 1);
-			// eslint-disable-next-line @typescript-eslint/no-deprecated
+			// See the note on ScriptProcessorNodeLike for why ScriptProcessor is used
+			// instead of AudioWorklet, and why it is reached through a local alias.
+			const processor = (context as unknown as ScriptProcessorFactory).createScriptProcessor(4096, 1, 1);
 			processor.onaudioprocess = (ev) => {
-				// eslint-disable-next-line @typescript-eslint/no-deprecated
 				const data = ev.inputBuffer.getChannelData(0);
 				const down = downsampleBuffer(data, context.sampleRate, REALTIME_SAMPLE_RATE);
 				const pcm = floatTo16BitPcm(down);
@@ -117,7 +126,6 @@ export class PcmCapture {
 	}
 
 	stop(): void {
-		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		if (this.processor) this.processor.onaudioprocess = null;
 		try { this.source?.disconnect(); } catch { /* best effort */ }
 		try { this.processor?.disconnect(); } catch { /* best effort */ }

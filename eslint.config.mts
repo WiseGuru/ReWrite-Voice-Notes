@@ -85,6 +85,23 @@ export default tseslint.config(
 		},
 	},
 	{
+		// Type-checked rules the Obsidian community-review bot runs but the local
+		// obsidianmd recommended config does not turn on. Enabling them here gives
+		// local parity with the reviewer so these never surface only at submission
+		// time again. Scoped to source (test/ keeps its own relaxations below).
+		files: ['src/**/*.ts'],
+		plugins: { '@typescript-eslint': tseslint.plugin },
+		rules: {
+			'@typescript-eslint/no-deprecated': 'error',
+			'@typescript-eslint/no-unsafe-assignment': 'error',
+			'@typescript-eslint/no-unsafe-call': 'error',
+			'@typescript-eslint/no-unsafe-member-access': 'error',
+			'@typescript-eslint/no-unsafe-argument': 'error',
+			'@typescript-eslint/no-unsafe-return': 'error',
+			'@typescript-eslint/no-unnecessary-type-assertion': 'error',
+		},
+	},
+	{
 		// test/ runs under Node via Vitest, not inside Obsidian, so the Node-builtin ban that
 		// keeps src/ portable to the Electron/mobile plugin runtime doesn't apply here.
 		files: ['test/**/*.ts'],
