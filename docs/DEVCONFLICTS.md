@@ -89,6 +89,15 @@ Guideline: "Use `editorCallback` or `editorCheckCallback` for commands requiring
 ### 9. `app.vault.getFiles()` full-vault scan
 [src/ui/audio-source.ts:18](../src/ui/audio-source.ts#L18) iterates all vault files to filter audio by extension. The guideline's "don't iterate all files" advice is specifically about *finding a file by path* (use `getFileByPath`), which this is not — there is no extension index in the API, so a scan is reasonable. Listed only for completeness; not a real conflict.
 
+### 10. 1.2.1 automated-review `no-unsafe-*` warnings (type-environment mismatch)
+The 1.2.1 submission drew ~30 warnings (`no-unsafe-assignment/call/member-access/argument/return`, `no-unnecessary-type-assertion`) that local `npm run lint` did not reproduce even after the rule mirror ([eslint.config.mts](../eslint.config.mts)) was in place. Investigation showed none of the flagged code was genuinely unsafe; every warning came from the bot's **type environment** differing from local. The bot's typed lint uses the repo's own `tsconfig.json` but not the repo's full `node_modules`, so a value that types cleanly locally can be error-typed there (and an error-typed value trips `no-unsafe-*` at every use). Three sub-causes:
+
+1. **Declared `lib` was lower than the APIs the code uses.** `tsconfig.json` declared `lib` ES2016 while the source uses `Object.entries`/`values`/`fromEntries`, `String.padStart`, and `Promise.finally` (ES2017–ES2019). Locally, tsc auto-included the test suite's `@types/node`, which silently supplied those types; in the bot's environment they were error-typed (~20 of the warnings).
+2. **`moment`'s types don't resolve in the bot's environment.** `obsidian` itself types fine there, but its `moment` re-export's type comes from the `moment` package (a transitive dependency), which the bot doesn't have — every direct `moment(...)` call was error-typed (5 warnings across [src/audio-persist.ts](../src/audio-persist.ts), [src/insert.ts](../src/insert.ts), [src/template-guide.ts](../src/template-guide.ts)).
+3. **TS-version-dependent assertions.** On TS 5.7+ (local, 5.8) a value declared `Uint8Array` is `ArrayBufferLike`-backed and needs `as BufferSource` to satisfy WebCrypto; on the bot's older TS the same assertion is "unnecessary" ([src/secrets.ts](../src/secrets.ts)).
+
+> **Resolution: Fixed (all three).** `tsconfig.json` now declares `lib: ["DOM", "ES2019"]` with `types: []` (so the `@types/node` masking can never recur — a lib/API mismatch now fails `npm run build` locally) and `skipLibCheck`. All `moment` calls go through `formatMoment` in [src/time.ts](../src/time.ts), a narrow structural alias over Obsidian's bundled moment (same pattern as `ScriptProcessorNodeLike`). The secrets byte helpers were restructured to need no `BufferSource` assertion under any TS version (inferred `ArrayBuffer`-backed return types, a `BufferSource` param, one 32-byte defensive copy of the hash-wasm output), and the two `as Record<string, unknown>` narrows the bot flagged were replaced with an `isRecord` type predicate.
+
 ---
 
 ## Checked and clean (no conflict found)

@@ -1,4 +1,5 @@
-import { App, MarkdownView, Modal, moment, normalizePath, Notice, Setting, TFile } from 'obsidian';
+import { App, MarkdownView, Modal, normalizePath, Notice, Setting, TFile } from 'obsidian';
+import { formatMoment } from 'time';
 import { NewFileCollisionMode, NoteTemplate } from './types';
 import { guardReservedName, sanitizeFilename } from './templates-folder';
 
@@ -207,11 +208,11 @@ class RenamePromptModal extends Modal {
 }
 
 function expandFilenameTemplate(template: string, title?: string): string {
-	const now = moment();
+	const now = new Date();
 	const safeTitle = title ? titleToFilename(title) : '';
 	return template
-		.replace(/\{\{date\}\}/g, now.format('YYYY-MM-DD'))
-		.replace(/\{\{time\}\}/g, now.format('HHmmss'))
+		.replace(/\{\{date\}\}/g, formatMoment('YYYY-MM-DD', now))
+		.replace(/\{\{time\}\}/g, formatMoment('HHmmss', now))
 		.replace(/\{\{title\}\}/g, safeTitle);
 }
 

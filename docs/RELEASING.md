@@ -30,7 +30,7 @@ The tag name must equal `manifest.json`'s `version` exactly. `.npmrc` already pi
 - **No `v` in the tag.** The release tag must match `manifest.json` `version` character-for-character: `1.0.1`, never `v1.0.1`.
 - **Three loose asset files.** `main.js`, `manifest.json`, `styles.css` attached as individual binary assets, never zipped. The workflow does this; do not hand-upload.
 - **A new release needs a new version number.** Obsidian's automated review only registers a change when the version increments. Re-pushing the same version does not count as a new submission. Bump the patch/minor/major rather than overwriting a published version. (To address review feedback, update the repo and publish a new GitHub release with an incremented version.)
-- **Version format is `x.y.z` only.** Semantic Versioning, no pre-release suffixes (no `1.0.0-beta`, no build metadata). The initial release is `1.0.0`.
+- **Stable version format is `x.y.z` only.** Semantic Versioning, no build metadata. The initial release is `1.0.0`. Pre-release suffixes (`1.3.0-alpha`, `1.3.0-beta.1`) are allowed **only** for the alpha/beta channel below, which is deliberately invisible to the official review/updater; a stable tag never carries a suffix.
 - **The directory reads `manifest.json` at the HEAD of your default branch** (`master`), not just the release asset. Keep master's `manifest.json` correct and in sync with the released version.
 - **`minAppVersion` must be >= the highest `@since` of every Obsidian API you call directly** (anything not behind a runtime feature-detect). Check `node_modules/obsidian/obsidian.d.ts` for the `@since` of new APIs. Example from this project: `FileManager.trashFile` is `@since 1.6.6`, which is why `minAppVersion` is `1.6.6` (raised from 1.4.4, which `FileManager.processFrontMatter` `@since 1.4.4` had driven). The `obsidianmd/no-unsupported-api` lint rule flags a direct call newer than the declared floor. Feature-detected APIs (like `app.secretStorage`) do not raise the floor.
 - **`versions.json` maps plugin version -> minAppVersion.** Our [version-bump.mjs](../version-bump.mjs) only adds a new line when the `minAppVersion` value is not already present (i.e. when the floor actually changes). That is valid: Obsidian reads the latest version straight from the release `manifest.json`, and consults `versions.json` only to find the newest plugin version compatible with an older app. If you raise `minAppVersion`, confirm a new `versions.json` entry was written; if you keep it, no new line is expected.
@@ -49,6 +49,8 @@ The tag name must equal `manifest.json`'s `version` exactly. `.npmrc` already pi
 These are the recurring findings; clear them before tagging. Most are also why the items above exist.
 
 **Local lint now mirrors the bot for the classes that previously slipped through** (the 1.2.0 submission failed on three the local lint did not catch). [eslint.config.mts](../eslint.config.mts) enables: the type-checked `@typescript-eslint` rules (`no-deprecated`, the `no-unsafe-*` family, `no-unnecessary-type-assertion`); `no-unsupported-api` (cherry-picked from a `0.4.1` alias of `eslint-plugin-obsidianmd` since our pinned `0.1.9` base lacks it) so a direct Obsidian API newer than `minAppVersion` is caught locally; and `noInlineConfig` so an `eslint-disable` can never silence a rule. So `npm run lint` failing on these now is the point. When the review bot adds a new rule class we do not catch, add it here the same way (prefer cherry-picking one rule from the alias over adopting `0.4.x`'s recommended config wholesale, whose `ui/sentence-case` is over-aggressive and diverges from the bot).
+
+**The bot's TYPE environment also differs from local, and mirroring the rules alone does not cover that** (the 1.2.1 submission drew ~30 `no-unsafe-*` warnings local lint could not reproduce; see [DEVCONFLICTS.md](DEVCONFLICTS.md) finding 10). The bot lints with the repo's own `tsconfig.json` but not the repo's full `node_modules`: `@types/node` and `moment`'s typings are absent there, and its TypeScript version may lag ours. Anything that is error-typed in that environment trips `no-unsafe-*` at every use. The standing guards: `tsconfig.json` declares `lib` matched to the APIs the code actually uses plus `types: []`, so an API newer than the declared lib fails `npm run build` locally instead of being silently typed by the test suite's `@types/node`; `moment` is only reached through `formatMoment` in [src/time.ts](../src/time.ts) (never called directly from `obsidian`'s re-export); and type assertions whose necessity depends on the TS version (`as BufferSource`) are avoided in favor of code that needs no assertion on any version. If the bot ever flags a `no-unsafe-*` or `no-unnecessary-type-assertion` warning that local lint does not show, suspect a type-resolution difference first: check what supplies the type locally (`npx tsc -noEmit --explainFiles`), rather than assuming the warning is spurious.
 
 - **Plugin `id`**: lowercase letters and hyphens only, must not end in `plugin`, must not contain `obsidian`. Locked once published; do not change it. (Ours is `rewrite-voice-notes`.)
 - **No newer-than-minAppVersion APIs**: see the `minAppVersion` rule above. Enforced locally by `obsidianmd-latest/no-unsupported-api`.
@@ -90,6 +92,27 @@ gh attestation verify /tmp/rel/main.js --repo WiseGuru/ReWrite-Voice-Notes # mus
 ```
 
 Also confirm the release page shows the bare tag (`1.0.1`, no `v`) and all three assets.
+
+## Pre-release (alpha/beta) builds
+
+For a manual smoke test through Obsidian before committing to a stable release, cut a pre-release. It builds and publishes the same three attested assets as a normal release, but as a GitHub **prerelease**, so it is invisible to the official channel: GitHub's "latest release" (what Obsidian's in-app updater reads) excludes prereleases, and the community submission review reads `manifest.json` at **master's HEAD**, which this flow never touches.
+
+Convention: pre-release the version you are *about to* ship. If the next release is `1.3.0`, tag `1.3.0-alpha` (then `-beta`, `-rc`, etc.) while master's `manifest.json` still reads the last stable version (`1.2.1`). Because `1.3.0-alpha` < `1.3.0` in SemVer, a BRAT beta tester is auto-upgraded when the real `1.3.0` lands.
+
+Any tag containing a `-` is treated as a pre-release by [release.yml](../.github/workflows/release.yml): it stamps the tag's version into the **published** `manifest.json` at build time (master's copy is left alone) and sets `prerelease: true` on the GitHub release.
+
+```bash
+# On master, clean tree, everything you want to test committed.
+# Do NOT bump manifest.json / package.json / versions.json and do NOT commit a bump.
+npm run build && npm run lint          # must both pass
+git tag -a 1.3.0-alpha -m "Pre-release 1.3.0-alpha"
+git push origin 1.3.0-alpha
+# CI publishes a prerelease with a manifest.json version of 1.3.0-alpha.
+```
+
+Iterate by pushing further suffixed tags (`1.3.0-alpha.2`, `1.3.0-beta`, ...). To install for review, either download the three assets from the prerelease page and copy them into `<Vault>/.obsidian/plugins/rewrite-voice-notes/`, or add the repo in **BRAT** with "beta versions" enabled (BRAT reads the newest prerelease). When satisfied, cut the stable `1.3.0` the normal way (TL;DR above): the real version bump + bare tag. Pre-release tags and their GitHub releases can be left in place (they stay marked prerelease) or deleted; they never affect the stable channel.
+
+Note: `versions.json` is not updated for pre-releases (no bump runs), which is correct. Never point a stable tag at a suffixed name, and never commit a `-alpha`/`-beta` version into master's `manifest.json` (it would corrupt what the directory reads at HEAD).
 
 ## Re-releasing the same version (rare)
 

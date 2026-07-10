@@ -1,4 +1,5 @@
-import { App, moment, normalizePath } from 'obsidian';
+import { App, normalizePath } from 'obsidian';
+import { formatMoment } from 'time';
 import { GlobalSettings } from './types';
 
 interface AttachmentFileManager {
@@ -50,7 +51,7 @@ export function mimeToExtension(mime: string): string {
 }
 
 export function buildAudioFilename(now: Date, ext: string): string {
-	const stamp = moment(now).format('YYYY-MM-DD-HHmmss');
+	const stamp = formatMoment('YYYY-MM-DD-HHmmss', now);
 	return `ReWrite-${stamp}.${ext}`;
 }
 

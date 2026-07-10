@@ -234,9 +234,9 @@ export function extractFromBlock(
 	let usedStrict = false;
 	try {
 		const parsed: unknown = parseYaml(block);
-		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+		if (isRecord(parsed)) {
 			usedStrict = true;
-			for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+			for (const [key, value] of Object.entries(parsed)) {
 				// Values are scalars. Take strings as-is, coerce numbers/booleans,
 				// and ignore null/undefined or nested objects/arrays.
 				let coerced: string | null = null;
@@ -278,6 +278,10 @@ export function extractFromBlock(
 
 	const body = raw.slice(match[0].length).replace(/^\s+/, '');
 	return { body, properties, title: title || undefined };
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+	return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function stripQuotes(value: string): string {

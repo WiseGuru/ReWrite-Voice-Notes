@@ -1,4 +1,5 @@
-import { App, moment, normalizePath, TFile } from 'obsidian';
+import { App, normalizePath, TFile } from 'obsidian';
+import { formatMoment } from 'time';
 import type { TemplateUpdateConflict, TemplateUpdateEntry, UpdateResult } from './templates-folder';
 
 // The Update button's worklist. Lives next to the templates folder (in its
@@ -120,7 +121,7 @@ function renderUpdateReport(result: UpdateResult): string {
 	lines.push('# ReWrite: template update report');
 	lines.push('');
 	const failNote = result.parseFailed ? `, ${result.parseFailed} could not be parsed` : '';
-	lines.push(`Generated ${moment().format('YYYY-MM-DD HH:mm')}. ${result.updated} updated, ${result.conflicts} need manual review, ${result.created} created, ${result.unchanged} unchanged${failNote}.`);
+	lines.push(`Generated ${formatMoment('YYYY-MM-DD HH:mm')}. ${result.updated} updated, ${result.conflicts} need manual review, ${result.created} created, ${result.unchanged} unchanged${failNote}.`);
 	lines.push('');
 
 	const actionable = result.entries.filter((e) => e.status !== 'unchanged');

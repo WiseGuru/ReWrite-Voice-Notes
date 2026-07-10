@@ -32,6 +32,10 @@ The auto-start and idle-stop lifecycle toggles shipped (see Unreleased). The rem
 
 Merged to `master`, not yet tagged. These become the next version's release notes.
 
+### Fix: resolve the 1.2.1 automated-review `no-unsafe-*` warnings at the root (type-environment parity)
+
+All ~30 warnings the Obsidian review bot raised on 1.2.1 traced to its lint environment resolving types differently from local, not to genuinely unsafe code (full analysis: [DEVCONFLICTS.md](DEVCONFLICTS.md) finding 10). Fixed at the root so the class cannot recur: `tsconfig.json` now declares `lib: ["DOM", "ES2019"]` (matching the ES2017–ES2019 APIs the code actually uses) with `types: []` so the test suite's `@types/node` can no longer mask a lib/API mismatch locally; all `moment` calls go through the new `formatMoment` structural wrapper in `src/time.ts` (moment's typings don't resolve in the bot's environment); `src/secrets.ts` was restructured to need no `as BufferSource` assertions under any TypeScript version; and two `as Record<string, unknown>` narrows became an `isRecord` type predicate. Runtime behavior is unchanged. Guardrails documented in CLAUDE.md's "Review-bot type environment" gotcha and RELEASING.md's parity section.
+
 ---
 
 ## Released

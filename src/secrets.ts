@@ -404,14 +404,19 @@ function bytesToBase64(bytes: Uint8Array): string {
 	return btoa(s);
 }
 
-function base64ToBytes(b64: string): Uint8Array {
+// Return types are deliberately inferred (not annotated `Uint8Array`): on TS 5.7+
+// the inferred type is the ArrayBuffer-backed Uint8Array that WebCrypto's
+// BufferSource params accept directly, while an explicit `Uint8Array` annotation
+// widens to an ArrayBufferLike backing and forces `as BufferSource` assertions
+// that older TS (the community-review bot's) then flags as unnecessary.
+function base64ToBytes(b64: string) {
 	const bin = atob(b64);
 	const bytes = new Uint8Array(bin.length);
 	for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 	return bytes;
 }
 
-function randomBytes(n: number): Uint8Array {
+function randomBytes(n: number) {
 	const out = new Uint8Array(n);
 	crypto.getRandomValues(out);
 	return out;
@@ -428,7 +433,7 @@ function isAllocationFailure(e: unknown): boolean {
 
 // ---------- key derivation ----------
 
-async function deriveKeyFromPassphrase(passphrase: string, salt: Uint8Array, iterations: number): Promise<CryptoKey> {
+async function deriveKeyFromPassphrase(passphrase: string, salt: BufferSource, iterations: number): Promise<CryptoKey> {
 	const passBytes = new TextEncoder().encode(passphrase);
 	const baseKey = await crypto.subtle.importKey(
 		'raw',
@@ -438,7 +443,7 @@ async function deriveKeyFromPassphrase(passphrase: string, salt: Uint8Array, ite
 		['deriveKey'],
 	);
 	return crypto.subtle.deriveKey(
-		{ name: 'PBKDF2', hash: 'SHA-256', salt: salt as BufferSource, iterations },
+		{ name: 'PBKDF2', hash: 'SHA-256', salt, iterations },
 		baseKey,
 		{ name: 'AES-GCM', length: 256 },
 		false,
@@ -464,7 +469,10 @@ async function deriveArgon2idKey(
 	});
 	return crypto.subtle.importKey(
 		'raw',
-		raw as BufferSource,
+		// hash-wasm types the binary output as a bare Uint8Array (ArrayBufferLike
+		// backing on TS 5.7+); copying into a fresh array satisfies BufferSource on
+		// every TS version without an assertion. 32 bytes, once per derivation.
+		new Uint8Array(raw),
 		{ name: 'AES-GCM' },
 		false,
 		['encrypt', 'decrypt'],
@@ -516,7 +524,7 @@ async function buildPassphraseKdfAndKey(passphrase: string): Promise<{ kdf: Pass
 async function aesGcmEncrypt(key: CryptoKey, plaintext: string): Promise<string> {
 	const iv = randomBytes(AES_IV_BYTES);
 	const ct = await crypto.subtle.encrypt(
-		{ name: 'AES-GCM', iv: iv as BufferSource },
+		{ name: 'AES-GCM', iv },
 		key,
 		new TextEncoder().encode(plaintext),
 	);
@@ -529,9 +537,9 @@ async function aesGcmDecrypt(key: CryptoKey, payload: string): Promise<string> {
 	const iv = base64ToBytes(payload.slice(0, sepIdx));
 	const ct = base64ToBytes(payload.slice(sepIdx + 1));
 	const pt = await crypto.subtle.decrypt(
-		{ name: 'AES-GCM', iv: iv as BufferSource },
+		{ name: 'AES-GCM', iv },
 		key,
-		ct as BufferSource,
+		ct,
 	);
 	return new TextDecoder().decode(pt);
 }

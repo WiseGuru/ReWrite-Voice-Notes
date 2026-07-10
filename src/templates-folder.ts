@@ -421,6 +421,10 @@ async function parseTemplateFile(app: App, file: TFile): Promise<NoteTemplate | 
 	return parseTemplateContent(file, content);
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+	return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
 // Split out from parseTemplateFile so callers that already hold the file content (the update
 // walk previously read each candidate file up to three times: once for the id, once for the
 // full parse, once more to diff against the rendered output) can parse without a redundant read.
@@ -482,8 +486,8 @@ export function parseTemplateContent(file: TFile, content: string): NoteTemplate
 	// blank keys are skipped; a missing/non-string instruction becomes "".
 	const noteProperties: NotePropertySpec[] = [];
 	const rawProps = obj.noteProperties;
-	if (rawProps && typeof rawProps === 'object' && !Array.isArray(rawProps)) {
-		for (const [name, instruction] of Object.entries(rawProps as Record<string, unknown>)) {
+	if (isRecord(rawProps)) {
+		for (const [name, instruction] of Object.entries(rawProps)) {
 			const key = name.trim();
 			if (!key) continue;
 			noteProperties.push({
