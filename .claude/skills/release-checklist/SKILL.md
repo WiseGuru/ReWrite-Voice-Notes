@@ -1,11 +1,11 @@
 ---
 name: release-checklist
-description: Run the ReWrite (Voice Notes) plugin's pre-release verification. Use before tagging a release, or when the user asks to smoke-test / verify the plugin in a real vault. Runs the automated pre-checks (build, lint, test, and the advisory local reviews), installs a fresh build into a test vault, then walks the feature-by-feature CHECKLIST.md so the human effort goes into clicking through features rather than copying files.
+description: Run the ReWrite (Voice Notes) plugin's release verification. Use before cutting a stable release, or when the user asks to smoke-test / verify the plugin in a real vault. Runs the automated pre-checks (build, lint, test, and the advisory local reviews), installs the published -alpha/-beta prerelease artifact (or a fresh local build when no prerelease exists yet) into a test vault, then walks the feature-by-feature CHECKLIST.md so the human effort goes into clicking through features rather than copying files.
 ---
 
 # Release checklist
 
-This plugin has no headless UI test harness, so event-wiring and UI-lifecycle bugs are invisible to `npm run build` / `npm run lint` / `npm test`. This skill closes that gap: it runs every automated check available, installs a fresh build into a test Obsidian vault, then drives a human through a feature-by-feature manual pass.
+This plugin has no headless UI test harness, so event-wiring and UI-lifecycle bugs are invisible to `npm run build` / `npm run lint` / `npm test`. This skill closes that gap: it runs every automated check available, installs the artifact under test into a test Obsidian vault (the published `-alpha`/`-beta` prerelease for a release gate; a fresh local build for mid-development iteration), then drives a human through a feature-by-feature manual pass.
 
 It is the successor to the stale "Testing Checklist" in `obsidian-voice-notes-spec.md` and the token "manual smoke test" step in `docs/RELEASING.md`. The mechanics of each tool are in `docs/DEV_TOOLING.md`; the tag/push release steps are in `docs/RELEASING.md`. This skill is the front door that sequences them.
 
@@ -25,16 +25,22 @@ npm run review:docs   # advisory local doc-consistency review
 
 ## Phase 2 — Setup check
 
-1. Confirm `dev-tools.config.json` exists at the repo root with a non-empty `releaseVault.vaultPath`. If not, tell the user to copy `dev-tools.config.example.json` to `dev-tools.config.json` and fill it in. A dedicated **scratch** vault is ideal; a real vault is acceptable because `release:prep` only overwrites the three build artifacts (see Phase 3), but never point it anywhere you'd mind a plugin reload.
-2. Confirm the working tree holds exactly what the user intends to ship. For a real release you also want the version already bumped (`npm version <patch|minor|major> --no-git-tag-version`) so the manual pass exercises the actual versioned artifact **before** you commit and tag — do not tag first.
+1. Confirm `dev-tools.config.json` exists at the repo root with a non-empty `releaseVault.vaultPath`. If not, tell the user to copy `dev-tools.config.example.json` to `dev-tools.config.json` and fill it in. A dedicated **scratch** vault is ideal; a real vault is acceptable because the install only overwrites the three build artifacts (see Phase 3), but never point it anywhere you'd mind a plugin reload.
+2. Confirm the working tree holds exactly what the user intends to ship, and that master carries **no version bump**: per `docs/RELEASING.md`, all testing happens on published `-alpha`/`-beta` prerelease artifacts while `manifest.json` stays at the last stable version. The bump + bare tag come only after this skill's go decision.
+3. Identify the prerelease to test: the newest `-alpha`/`-beta` tag whose commit matches what the user intends to ship (`gh release list`). If the tree has moved past the latest prerelease, cut a new suffixed tag first (see RELEASING.md) — do not sign off on an artifact that doesn't match master.
 
-## Phase 3 — Build and install
+## Phase 3 — Install the artifact under test
+
+**Release gate (a prerelease exists):** install the published, attested prerelease assets into the vault — that exact build is what the stable release will re-version:
 
 ```bash
-npm run release:prep
+gh release download <tag> --repo WiseGuru/ReWrite-Voice-Notes --clobber \
+  --dir "<vaultPath>/.obsidian/plugins/rewrite-voice-notes"
 ```
 
-This runs `npm run build`, then copies `main.js` / `manifest.json` / `styles.css` into `<vaultPath>/.obsidian/plugins/rewrite-voice-notes/`. It fails loudly (non-zero exit) on a build error or a bad vault path; surface any failure and stop. It **only overwrites those three files** — `data.json` and `secrets.json.nosync` in the target folder are left untouched, so a re-install keeps the user's settings and keys (this is why running against a vault with real data is safe).
+**Local iteration (no prerelease yet, or mid-development):** `npm run release:prep` builds the working tree and copies the three files into the same folder. Fine for finding bugs fast; the final pass before a stable tag should still run against the prerelease artifact.
+
+Both paths **only overwrite `main.js` / `manifest.json` / `styles.css`** — `data.json` and `secrets.json.nosync` in the target folder are left untouched, so a re-install keeps the user's settings and keys (this is why running against a vault with real data is safe). `release:prep` fails loudly (non-zero exit) on a build error or a bad vault path; surface any failure and stop.
 
 Then tell the user to open the vault and reload the plugin (Settings -> Community plugins -> toggle it off and on, or reload Obsidian), and confirm it loads with no errors in the developer console. **A clean load is itself the first checklist item** — it is the exact step that would have caught the regression that motivated this tooling.
 
@@ -49,6 +55,6 @@ Open `CHECKLIST.md` (in this skill folder) and walk it area by area. For each it
 
 ## Phase 5 — Summary and hand-off to release
 
-Save the filled-out run to `docs/claude-scratch/release-checklist-<version>.md` (read `<version>` from `manifest.json`; that folder is gitignored). Then give a clear **go / no-go**: list every FAIL with its symptom, note any SKIP and why, and state plainly whether the build is releasable. Do not soften a FAIL into a pass.
+Save the filled-out run to `docs/claude-scratch/release-checklist-<version>.md` (name it after the tag under test, e.g. `1.3.0-alpha`; when testing a local `release:prep` build instead, use `manifest.json`'s version. The folder is gitignored). Then give a clear **go / no-go**: list every FAIL with its symptom, note any SKIP and why, and state plainly whether the build is releasable. Do not soften a FAIL into a pass.
 
-On a **go**, the actual release (commit the bump + rolled `docs/ROADMAP.md`, tag the bare version, push, let CI build the attested assets) follows `docs/RELEASING.md` — this skill stops at the go/no-go decision; it does not tag or push.
+On a **go**, the actual release (bump `npm version <patch|minor|major> --no-git-tag-version`, commit the bump + rolled `docs/ROADMAP.md`, tag the bare version, push, let CI build the attested assets) follows `docs/RELEASING.md`. The bump commit (plus doc-only commits) is the only permitted delta between the tested prerelease and the stable tag; any artifact-affecting change means a new prerelease round. This skill stops at the go/no-go decision; it does not tag or push.

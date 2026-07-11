@@ -2,28 +2,34 @@
 
 How to cut a new release the Obsidian way, without tripping the community-plugin review. Read this before every release.
 
-Releases are automated by [.github/workflows/release.yml](../.github/workflows/release.yml): pushing a version tag builds the bundle, attaches build-provenance attestations, and publishes the GitHub release. Your job is the version bump, the pre-flight checks, and pushing a correctly named tag.
+Releases are automated by [.github/workflows/release.yml](../.github/workflows/release.yml): pushing a version tag builds the bundle, attaches build-provenance attestations, and publishes the GitHub release. Your job is the pre-flight checks and pushing correctly named tags.
+
+**Every release rides the alpha/beta channel first.** All testing (the manual feature pass included) happens against published `-alpha`/`-beta` prerelease artifacts; cutting the stable release is then *only* the version bump + bare tag on the same source. Between the last prerelease you tested and the stable tag, nothing that affects the built artifact (`src/`, `styles.css`, `manifest.json` beyond the version, build config, dependencies) may change — doc-only commits may ride along, but any artifact-affecting change means a new prerelease round, not a direct-to-stable commit.
 
 ## TL;DR
 
 ```bash
-# 0. On master, clean working tree, everything you want shipped is committed.
-npm run build && npm run lint          # must both pass
-# 0a. Roll docs/ROADMAP.md: move the Unreleased items into a new
-#     "### <version> — <YYYY-MM-DD>" block under Released, leave Unreleased empty.
-# 1. Bump version files (no auto commit/tag so we control the message)
+# 1. On master, clean tree, everything you want to ship committed. Do NOT bump yet —
+#    manifest.json stays at the last stable version throughout testing.
+npm run build && npm run lint && npm test   # must all pass
+# 2. Cut a prerelease of the version you are ABOUT to ship
+git tag -a 1.3.0-alpha -m "Pre-release 1.3.0-alpha"
+git push origin 1.3.0-alpha
+# 3. Test the PUBLISHED prerelease artifact in a real vault (the release-checklist
+#    skill / CHECKLIST.md — see "The alpha/beta channel" below for install options).
+#    Fixes needed? Commit them, tag 1.3.0-alpha.2 / 1.3.0-beta, re-test. Repeat until green.
+# 4. Go: roll docs/ROADMAP.md (Unreleased -> "### <version> — <YYYY-MM-DD>" under
+#    Released), then bump and tag the bare version.
 npm version patch --no-git-tag-version # or minor / major
-# 2. Commit the bump (include the rolled roadmap)
 git add manifest.json package.json package-lock.json versions.json docs/ROADMAP.md
-git commit -m "1.0.1"                  # use the new version as the subject
-# 3. Tag with the BARE version (no leading v) and push
-git tag -a 1.0.1 -m "Release 1.0.1"
+git commit -m "1.3.0"                  # use the new version as the subject
+git tag -a 1.3.0 -m "Release 1.3.0"
 git push origin master
-git push origin 1.0.1
-# 4. Watch CI, then verify provenance (see Verify below)
+git push origin 1.3.0
+# 5. Watch CI, then verify provenance (see Verify below)
 ```
 
-The tag name must equal `manifest.json`'s `version` exactly. `.npmrc` already pins `tag-version-prefix=""`, so `npm version` produces a bare tag too if you ever let it tag directly.
+The stable tag name must equal `manifest.json`'s `version` exactly (bare, no leading `v`). `.npmrc` already pins `tag-version-prefix=""`, so `npm version` produces a bare tag too if you ever let it tag directly.
 
 ## Hard rules (Obsidian requirements)
 
@@ -33,14 +39,14 @@ The tag name must equal `manifest.json`'s `version` exactly. `.npmrc` already pi
 - **Stable version format is `x.y.z` only.** Semantic Versioning, no build metadata. The initial release is `1.0.0`. Pre-release suffixes (`1.3.0-alpha`, `1.3.0-beta.1`) are allowed **only** for the alpha/beta channel below, which is deliberately invisible to the official review/updater; a stable tag never carries a suffix.
 - **The directory reads `manifest.json` at the HEAD of your default branch** (`master`), not just the release asset. Keep master's `manifest.json` correct and in sync with the released version.
 - **`minAppVersion` must be >= the highest `@since` of every Obsidian API you call directly** (anything not behind a runtime feature-detect). Check `node_modules/obsidian/obsidian.d.ts` for the `@since` of new APIs. Example from this project: `FileManager.trashFile` is `@since 1.6.6`, which is why `minAppVersion` is `1.6.6` (raised from 1.4.4, which `FileManager.processFrontMatter` `@since 1.4.4` had driven). The `obsidianmd/no-unsupported-api` lint rule flags a direct call newer than the declared floor. Feature-detected APIs (like `app.secretStorage`) do not raise the floor.
-- **`versions.json` maps plugin version -> minAppVersion.** Our [version-bump.mjs](../version-bump.mjs) only adds a new line when the `minAppVersion` value is not already present (i.e. when the floor actually changes). That is valid: Obsidian reads the latest version straight from the release `manifest.json`, and consults `versions.json` only to find the newest plugin version compatible with an older app. If you raise `minAppVersion`, confirm a new `versions.json` entry was written; if you keep it, no new line is expected.
+- **`versions.json` maps plugin version -> minAppVersion.** Our [version-bump.mjs](../version-bump.mjs) records an entry for **every** bumped version (it skips only when the version key already exists). It previously added a line only when the `minAppVersion` *value* changed, which silently dropped every release after the first from the compatibility map; that was fixed, so expect one new line per release. Obsidian reads the latest version straight from the release `manifest.json`, and consults `versions.json` only to find the newest plugin version compatible with an older app.
 - **Public repo + LICENSE.** The repo must be public to be listed, with a real LICENSE whose copyright holder is correct (this plugin is 0BSD). The README must disclose network use, and `manifest.json` carries `author`, `authorUrl`, and (if you take donations) `fundingUrl`.
 
 ## Pre-flight checklist
 
 1. `npm run build` passes (this is `tsc -noEmit` then esbuild production; a type error here is a release blocker).
 2. `npm run lint` passes with zero warnings, and `npm test` passes. The local `eslint-plugin-obsidianmd` is looser than the official review bot, so also eyeball the conflict checklist below.
-3. Manual feature pass via the **`release-checklist` skill** (`.claude/skills/release-checklist/`), which sequences the whole verification. Its Phase 1 runs the automated pre-checks (`build` / `lint` / `test` plus the advisory `npm run review` and `npm run review:docs` local reviews); then `npm run release:prep` builds and installs `main.js` / `manifest.json` / `styles.css` into your test vault's `.obsidian/plugins/rewrite-voice-notes/` (configure `releaseVault.vaultPath` in `dev-tools.config.json` first — `release:prep` only overwrites those three files, so a vault with real data is safe); then the skill walks `CHECKLIST.md` feature by feature. `CHECKLIST.md` is also runnable standalone by a human without Claude Code. See [DEV_TOOLING.md](DEV_TOOLING.md). Test the actual **versioned** artifact: bump first (`npm version <patch|minor|major> --no-git-tag-version`), then run the pass, then commit + tag.
+3. Manual feature pass via the **`release-checklist` skill** (`.claude/skills/release-checklist/`), which sequences the whole verification. Its Phase 1 runs the automated pre-checks (`build` / `lint` / `test` plus the advisory `npm run review` and `npm run review:docs` local reviews); then the **published prerelease artifact** is installed into your test vault's `.obsidian/plugins/rewrite-voice-notes/` (download the three assets from the prerelease page, or use BRAT — the install only replaces `main.js` / `manifest.json` / `styles.css`, so a vault with real data is safe); then the skill walks `CHECKLIST.md` feature by feature. `CHECKLIST.md` is also runnable standalone by a human without Claude Code. See [DEV_TOOLING.md](DEV_TOOLING.md). Sign off on the prerelease build, not a local one: `npm run release:prep` (which builds and copies from the working tree) remains the fast path for iterating *before* a prerelease exists, but the pass that gates the release runs against the attested `-alpha`/`-beta` assets, and the stable bump happens only after the go decision.
 4. Update docs for any behavioral change ([CLAUDE.md](../CLAUDE.md), the user-facing [`wiki/`](../wiki/) pages, and the [README](../README.md)), per the doc-maintenance rules in CLAUDE.md.
 5. Roll [ROADMAP.md](ROADMAP.md): every item shipping in this release should already have an **Unreleased** entry. Move them into a new `### <version> — <YYYY-MM-DD>` heading at the top of the **Released** archive, and leave `## Unreleased` empty for the next cycle. The version + date must match the tag.
 
@@ -93,11 +99,11 @@ gh attestation verify /tmp/rel/main.js --repo WiseGuru/ReWrite-Voice-Notes # mus
 
 Also confirm the release page shows the bare tag (`1.0.1`, no `v`) and all three assets.
 
-## Pre-release (alpha/beta) builds
+## The alpha/beta channel (where all testing happens)
 
-For a manual smoke test through Obsidian before committing to a stable release, cut a pre-release. It builds and publishes the same three attested assets as a normal release, but as a GitHub **prerelease**, so it is invisible to the official channel: GitHub's "latest release" (what Obsidian's in-app updater reads) excludes prereleases, and the community submission review reads `manifest.json` at **master's HEAD**, which this flow never touches.
+Every release candidate is published as a prerelease and tested in that form. A prerelease builds and publishes the same three attested assets as a stable release, but as a GitHub **prerelease**, so it is invisible to the official channel: GitHub's "latest release" (what Obsidian's in-app updater reads) excludes prereleases, and the community submission review reads `manifest.json` at **master's HEAD**, which this flow never touches.
 
-Convention: pre-release the version you are *about to* ship. If the next release is `1.3.0`, tag `1.3.0-alpha` (then `-beta`, `-rc`, etc.) while master's `manifest.json` still reads the last stable version (`1.2.1`). Because `1.3.0-alpha` < `1.3.0` in SemVer, a BRAT beta tester is auto-upgraded when the real `1.3.0` lands.
+Convention: pre-release the version you are *about to* ship. If the next release is `1.3.0`, tag `1.3.0-alpha` (then `-alpha.2`, `-beta`, `-rc`, etc. as rounds accumulate) while master's `manifest.json` still reads the last stable version (`1.2.1`). Because `1.3.0-alpha` < `1.3.0` in SemVer, a BRAT beta tester is auto-upgraded when the real `1.3.0` lands.
 
 Any tag containing a `-` is treated as a pre-release by [release.yml](../.github/workflows/release.yml): it stamps the tag's version into the **published** `manifest.json` at build time (master's copy is left alone) and sets `prerelease: true` on the GitHub release.
 
@@ -110,7 +116,9 @@ git push origin 1.3.0-alpha
 # CI publishes a prerelease with a manifest.json version of 1.3.0-alpha.
 ```
 
-Iterate by pushing further suffixed tags (`1.3.0-alpha.2`, `1.3.0-beta`, ...). To install for review, either download the three assets from the prerelease page and copy them into `<Vault>/.obsidian/plugins/rewrite-voice-notes/`, or add the repo in **BRAT** with "beta versions" enabled (BRAT reads the newest prerelease). When satisfied, cut the stable `1.3.0` the normal way (TL;DR above): the real version bump + bare tag. Pre-release tags and their GitHub releases can be left in place (they stay marked prerelease) or deleted; they never affect the stable channel.
+To install for testing, either download the three assets from the prerelease page and copy them into `<Vault>/.obsidian/plugins/rewrite-voice-notes/`, or add the repo in **BRAT** with "beta versions" enabled (BRAT reads the newest prerelease). Run the feature pass (`release-checklist` skill / `CHECKLIST.md`) against that install. Fixes go to master and get a further suffixed tag (`1.3.0-alpha.2`, `1.3.0-beta`, ...); re-test at least the affected areas plus a clean load.
+
+When the pass is green, cut the stable `1.3.0` per the TL;DR: version bump + bare tag on the **same source** you just tested — the bump commit (plus doc-only commits) is the only permitted delta between the last prerelease and the stable release; anything touching the artifact means a new prerelease round. Pre-release tags and their GitHub releases can be left in place (they stay marked prerelease) or deleted; they never affect the stable channel.
 
 Note: `versions.json` is not updated for pre-releases (no bump runs), which is correct. Never point a stable tag at a suffixed name, and never commit a `-alpha`/`-beta` version into master's `manifest.json` (it would corrupt what the directory reads at HEAD).
 

@@ -1,6 +1,6 @@
-# ReWrite (Voice Notes) — release feature checklist
+# ReWrite (Voice Notes) â€” release feature checklist
 
-Manual pass to run in a **scratch** Obsidian vault against a fresh build (see `npm run release:prep`). This is the source of truth for pre-release verification; the old checklist in `obsidian-voice-notes-spec.md` is retired.
+Manual pass to run in a **scratch** Obsidian vault against the artifact under test — for a release gate, the published `-alpha`/`-beta` prerelease assets installed into the vault (see `docs/RELEASING.md`, "The alpha/beta channel"); for mid-development iteration, a fresh local build via `npm run release:prep`. This is the source of truth for release verification; the old checklist in `obsidian-voice-notes-spec.md` is retired.
 
 Runnable standalone (no Claude Code needed). For each item, do the action and record the outcome on its `Result:` line as PASS / FAIL / SKIP plus any notes. Scope the pass to what changed, but always run **Core** and the clean-load check.
 
@@ -119,7 +119,7 @@ Keep this file current: when a feature is added or changed, add or update its it
 - [ ] Settings "Auto-ingest folders": Add opens the rule popup; the template dropdown lists only newFile templates; rules list with enable toggle / Edit / Delete. Result: ____
 - [ ] `Process auto-ingest folders` processes each audio file in an enabled folder with that rule's template, one at a time, behind a sticky Notice with Cancel. Result: ____
 - [ ] On success each recording is moved to the attachments location and its note's `![[embed]]` still resolves; a re-run does not reprocess it. Result: ____
-- [ ] A file that fails stays in the ingest folder and is retried next run; the summary Notice reports processed/failed counts **and** a second sticky Notice lists the concrete failure reason per file (first 5, then "…and N more"). Result: ____
+- [ ] A file that fails stays in the ingest folder and is retried next run; the summary Notice reports processed/failed counts **and** a second sticky Notice lists the concrete failure reason per file (first 5, then "â€¦and N more"). Result: ____
 - [ ] **Ingest folder == recordings/attachments folder** is caught UP FRONT: setting a rule's folder to the same folder recordings are stored in (either the ReWrite Attachments folder, or Obsidian's own attachment folder when ReWrite's is blank) skips the rule with a clear "this folder is also where recordings are stored; point the rule at a different folder" Notice BEFORE any note is created. Result: ____
 - [ ] **Move-after-success failure**: if the note is created but the recording can't be moved out, the error says the note was created and to move/delete the source manually (so it isn't reprocessed). Result: ____
 
